@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Anita Test Env</title>
+    <!-- Same styles and fonts as original -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="src/styles/index.css">
+    
+    <script>
+        // MOCK window.api - ROUTE TO BRIDGE
+        window.api = {
+            callBridge: async (action, data = {}) => {
+                const res = await fetch(`http://localhost:8000/${action}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                return await res.json();
+            },
+            selectWorkspace: () => window.api.callBridge('get-workspace-path'),
+            getWorkspacePath: () => window.api.callBridge('get-workspace-path'),
+            getSettings: () => window.api.callBridge('get-settings'),
+            saveSettings: (s) => window.api.callBridge('save-settings', s),
+            readDir: (path) => window.api.callBridge('read-dir', { path }),
+            readFile: (path) => window.api.callBridge('read-file', { path }),
+            writeFile: (path, content) => window.api.callBridge('write-file', { path, content }),
+            pathExists: (path) => window.api.callBridge('path-exists', { path }),
+            executeCommand: (terminalId, command) => window.api.callBridge('execute-command', { terminalId, command }),
+            getTerminalCwd: (id) => window.api.callBridge('get-workspace-path'),
+            saveChats: (c) => window.api.callBridge('save-chats', c),
+            getChats: () => window.api.callBridge('get-chats'),
+            saveSessions: (s) => window.api.callBridge('save-sessions', s),
+            getSessions: () => window.api.callBridge('get-sessions'),
+            saveActiveChatId: (id) => window.api.callBridge('save-active-chat-id', id),
+            saveOpenChatIds: (ids) => window.api.callBridge('save-open-chat-ids', ids),
+            getOpenChatIds: () => window.api.callBridge('get-open-chat-ids'),
+            getActiveChatId: () => window.api.callBridge('get-active-chat-id'),
+            updateTokenUsage: (u) => window.api.callBridge('update-token-usage', u),
+            getTokenUsage: () => window.api.callBridge('get-token-usage'),
+            onTerminalData: () => {}, // Mock listener
+            closeTerminal: () => window.api.callBridge('close-terminal'),
+            togetherProxyChat: () => { throw new Error('Not implemented in bridge'); },
+            onTogetherChunk: () => {},
+            onTogetherDone: () => {},
+            onTogetherError: () => {}
+        };
+    </script>
+
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.44.0/min/vs/loader.min.js"></script>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel" src="src/App.js"></script>
+</body>
+</html>

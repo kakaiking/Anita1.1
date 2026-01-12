@@ -1,0 +1,641 @@
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const path = require('path');
+const fs = require('fs-extra');
+const { exec } = require('child_process');
+const Store = require('electron-store');
+
+const store = new Store();
+
+// Disable GPU acceleration to prevent common crashes on some systems
+app.disableHardwareAcceleration();
+
+let mainWindow;
+const terminalProcesses = new Map();
+let terminalCwds = new Map(); // Track CWD per terminal
+const TOGETHER_MASTER_KEY = "tgp_v1_8Ci3QosWgpxLdFKv_ShkW2YQS64_wi87zgxQE3AgffU"; // Placeholder for the shared key
+
+// File Watcher State
+let fileWatcher = null;
+let watcherDebounceTimer = null;
+
+function stopWatcher() {
+    if (fileWatcher) {
+        fileWatcher.close();
+        fileWatcher = null;
+    }
+}
+
+function startWatcher(targetPath) {
+    stopWatcher();
+
+    if (!targetPath || !fs.existsSync(targetPath)) return;
+
+    try {
+        console.log(`Starting file watcher on: ${targetPath}`);
+        fileWatcher = fs.watch(targetPath, { recursive: true }, (eventType, filename) => {
+            if (filename && (filename.includes('node_modules') || filename.includes('.git'))) return;
+
+            // Debounce to prevent flooding
+            if (watcherDebounceTimer) clearTimeout(watcherDebounceTimer);
+
+            watcherDebounceTimer = setTimeout(() => {
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    console.log(`File change detected (${eventType}): ${filename}`);
+                    mainWindow.webContents.send('file-changed', { eventType, filename });
+                }
+            }, 200);
+        });
+
+        fileWatcher.on('error', (error) => {
+            console.error(`Watcher error: ${error}`);
+            stopWatcher();
+        });
+    } catch (err) {
+        console.error(`Failed to start watcher: ${err.message}`);
+    }
+}
+
+function createWindow() {
+    mainWindow = new BrowserWindow({
+        width: 1200,
+        height: 800,
+        icon: path.join(__dirname, 'assets/logo.png'),
+        show: false,
+        frame: false, // Make it frameless
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            contextIsolation: true,
+            nodeIntegration: false,
+        },
+        title: "Anita - Agentic AI IDE"
+    });
+
+    mainWindow.loadFile('index.html');
+
+    mainWindow.once('ready-to-show', () => {
+        mainWindow.show();
+        // Restore watcher if workspace exists
+        const ws = store.get('workspacePath');
+        if (ws) startWatcher(ws);
+    });
+
+    mainWindow.on('closed', () => {
+        stopWatcher();
+        mainWindow = null;
+    });
+}
+
+app.whenReady().then(() => {
+    createWindow();
+});
+
+app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+});
+
+// IPC Handlers
+
+// Workspace
+ipcMain.handle('select-workspace', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+        properties: ['openDirectory']
+    });
+    if (result.canceled) return null;
+    const workspacePath = result.filePaths[0];
+    store.set('workspacePath', workspacePath);
+    startWatcher(workspacePath);
+    return workspacePath;
+});
+
+ipcMain.handle('get-workspace-path', () => {
+    return store.get('workspacePath');
+});
+
+// Settings
+ipcMain.handle('get-settings', () => {
+    return {
+        apiKey: store.get('apiKey'),
+        theme: store.get('theme', 'dark'),
+        model: store.get('model', 'deepseek/deepseek-chat'),
+        userBubbleColor: store.get('userBubbleColor'),
+        aiBubbleColor: store.get('aiBubbleColor'),
+        userTextColor: store.get('userTextColor'),
+        aiTextColor: store.get('aiTextColor'),
+        chatBgImage: store.get('chatBgImage'),
+        userBubbleBgImage: store.get('userBubbleBgImage'),
+        aiBubbleBgImage: store.get('aiBubbleBgImage'),
+        togetherKey: store.get('togetherKey'),
+        startupHelloColor: store.get('startupHelloColor'),
+        startupMsgColor: store.get('startupMsgColor'),
+    };
+});
+
+ipcMain.handle('save-settings', (event, settings) => {
+    if (settings.apiKey !== undefined) store.set('apiKey', settings.apiKey);
+    if (settings.theme !== undefined) store.set('theme', settings.theme);
+    if (settings.model !== undefined) store.set('model', settings.model);
+    if (settings.userBubbleColor !== undefined) store.set('userBubbleColor', settings.userBubbleColor);
+    if (settings.aiBubbleColor !== undefined) store.set('aiBubbleColor', settings.aiBubbleColor);
+    if (settings.userTextColor !== undefined) store.set('userTextColor', settings.userTextColor);
+    if (settings.aiTextColor !== undefined) store.set('aiTextColor', settings.aiTextColor);
+    if (settings.chatBgImage !== undefined) store.set('chatBgImage', settings.chatBgImage);
+    if (settings.userBubbleBgImage !== undefined) store.set('userBubbleBgImage', settings.userBubbleBgImage);
+    if (settings.aiBubbleBgImage !== undefined) store.set('aiBubbleBgImage', settings.aiBubbleBgImage);
+    if (settings.togetherKey !== undefined) store.set('togetherKey', settings.togetherKey);
+    if (settings.startupHelloColor !== undefined) store.set('startupHelloColor', settings.startupHelloColor);
+    if (settings.startupMsgColor !== undefined) store.set('startupMsgColor', settings.startupMsgColor);
+    return true;
+});
+
+// File System
+ipcMain.handle('read-dir', async (event, dirPath) => {
+    const workspace = store.get('workspacePath');
+    // Resolve relative paths against workspace
+    const absolutePath = path.isAbsolute(dirPath) ? dirPath : path.join(workspace, dirPath);
+
+    if (!absolutePath.startsWith(workspace)) throw new Error(`Access denied: ${absolutePath}`);
+
+    const files = await fs.readdir(absolutePath, { withFileTypes: true });
+    return files.map(file => ({
+        name: file.name,
+        path: path.join(absolutePath, file.name),
+        isDirectory: file.isDirectory()
+    }));
+});
+
+ipcMain.handle('read-file', async (event, filePath) => {
+    const workspace = store.get('workspacePath');
+    const absolutePath = path.isAbsolute(filePath) ? filePath : path.join(workspace, filePath);
+
+    if (!absolutePath.startsWith(workspace)) throw new Error(`Access denied: ${absolutePath}`);
+    return await fs.readFile(absolutePath, 'utf-8');
+});
+
+ipcMain.handle('write-file', async (event, filePath, content) => {
+    const workspace = store.get('workspacePath');
+    const absolutePath = path.isAbsolute(filePath) ? filePath : path.join(workspace, filePath);
+
+    if (!absolutePath.startsWith(workspace)) throw new Error(`Access denied: ${absolutePath}`);
+    await fs.ensureDir(path.dirname(absolutePath));
+    await fs.writeFile(absolutePath, content);
+    return true;
+});
+
+ipcMain.handle('rename-path', async (event, oldPath, newPath) => {
+    const workspace = store.get('workspacePath');
+    const oldAbs = path.isAbsolute(oldPath) ? oldPath : path.join(workspace, oldPath);
+    const newAbs = path.isAbsolute(newPath) ? newPath : path.join(workspace, newPath);
+
+    if (!oldAbs.startsWith(workspace) || !newAbs.startsWith(workspace)) {
+        throw new Error("Access denied: Path outside workspace");
+    }
+    await fs.rename(oldAbs, newAbs);
+    return true;
+});
+
+ipcMain.handle('delete-path', async (event, filePath) => {
+    const workspace = store.get('workspacePath');
+    const absolutePath = path.isAbsolute(filePath) ? filePath : path.join(workspace, filePath);
+
+    if (!absolutePath.startsWith(workspace)) throw new Error(`Access denied: ${absolutePath}`);
+
+    // Helper: Force shell-based deletion on Windows (more aggressive)
+    const forceDeleteWithShell = (targetPath) => {
+        return new Promise((resolve, reject) => {
+            if (process.platform !== 'win32') {
+                reject(new Error('Shell delete only supported on Windows'));
+                return;
+            }
+
+            // Use cmd.exe with rd /s /q for directories, del /f /q for files
+            const isDir = fs.existsSync(targetPath) && fs.statSync(targetPath).isDirectory();
+            const command = isDir
+                ? `rd /s /q "${targetPath}"`
+                : `del /f /q "${targetPath}"`;
+
+            exec(command, { timeout: 30000 }, (error, stdout, stderr) => {
+                if (error) {
+                    reject(new Error(`Shell delete failed: ${stderr || error.message}`));
+                } else {
+                    resolve(true);
+                }
+            });
+        });
+    };
+
+    // Helper: Kill any terminal processes that might be using the path
+    const releaseTerminalLocks = async (targetPath) => {
+        const terminalsToKill = [];
+
+        for (const [termId, cwd] of terminalCwds.entries()) {
+            if (cwd && (cwd.startsWith(targetPath) || cwd === targetPath)) {
+                terminalsToKill.push(termId);
+            }
+        }
+
+        for (const termId of terminalsToKill) {
+            const proc = terminalProcesses.get(termId);
+            if (proc) {
+                try {
+                    proc.kill('SIGTERM');
+                    await new Promise(r => setTimeout(r, 100));
+                    if (!proc.killed) proc.kill('SIGKILL');
+                } catch (e) {
+                    console.warn(`Failed to kill process for terminal ${termId}:`, e.message);
+                }
+                terminalProcesses.delete(termId);
+            }
+            terminalCwds.set(termId, workspace);
+            console.log(`Reset terminal ${termId} CWD to workspace and killed its process`);
+        }
+
+        // Small delay to allow handles to release
+        if (terminalsToKill.length > 0) {
+            await new Promise(r => setTimeout(r, 500));
+        }
+    };
+
+    // Robust delete with retry logic for EBUSY errors (common on Windows/OneDrive)
+    const deleteWithRetry = async (targetPath, retries = 8, delay = 500) => {
+        // First, release any terminal locks
+        await releaseTerminalLocks(targetPath);
+
+        for (let attempt = 1; attempt <= retries; attempt++) {
+            try {
+                await fs.remove(targetPath);
+                console.log(`Successfully deleted "${targetPath}" on attempt ${attempt}`);
+                return true; // Success
+            } catch (err) {
+                const isRetryable = err.code === 'EBUSY' || err.code === 'EPERM' || err.code === 'ENOTEMPTY' || err.code === 'EACCES';
+
+                if (isRetryable && attempt < retries) {
+                    console.warn(`Delete attempt ${attempt}/${retries} failed for "${targetPath}" (${err.code}). Retrying in ${delay}ms...`);
+
+                    // On later attempts, try more aggressive release
+                    if (attempt >= 3) {
+                        await releaseTerminalLocks(targetPath);
+                    }
+
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    delay = Math.min(delay * 1.5, 5000); // Exponential backoff, max 5s
+                } else if (isRetryable && attempt === retries && process.platform === 'win32') {
+                    // Last resort: try shell-based deletion on Windows
+                    console.warn(`Final fs.remove attempt failed. Trying shell-based deletion...`);
+                    try {
+                        await forceDeleteWithShell(targetPath);
+                        console.log(`Successfully deleted "${targetPath}" using shell command`);
+                        return true;
+                    } catch (shellErr) {
+                        console.error(`Shell delete also failed:`, shellErr.message);
+                        throw err; // Throw original error
+                    }
+                } else {
+                    throw err;
+                }
+            }
+        }
+    };
+
+    try {
+        await deleteWithRetry(filePath);
+        return true;
+    } catch (finalErr) {
+        console.error(`Failed to delete "${filePath}" after all attempts:`, finalErr);
+        throw new Error(`Could not delete "${path.basename(filePath)}": ${finalErr.code || finalErr.message}. The file may be in use by another program (like OneDrive, antivirus, or Explorer). Please close any programs using this folder and try again.`);
+    }
+});
+
+ipcMain.handle('create-folder', async (event, folderPath) => {
+    const workspace = store.get('workspacePath');
+    if (!folderPath.startsWith(workspace)) throw new Error("Access denied");
+    await fs.ensureDir(folderPath);
+    return true;
+});
+
+ipcMain.handle('path-exists', async (event, filePath) => {
+    const workspace = store.get('workspacePath');
+    if (!filePath.startsWith(workspace)) throw new Error("Access denied");
+    return await fs.pathExists(filePath);
+});
+
+const runCommand = (command, terminalId, resolve) => {
+    const workspace = store.get('workspacePath');
+    let cwd = terminalCwds.get(terminalId) || workspace;
+
+    const shell = process.platform === 'win32' ? 'cmd.exe' : '/bin/bash';
+    const args = process.platform === 'win32' ? ['/c', command] : ['-c', command];
+
+    const proc = require('child_process').spawn(shell, args, {
+        cwd: cwd || workspace,
+        env: { ...process.env, FORCE_COLOR: '1' }
+    });
+
+    terminalProcesses.set(terminalId, proc);
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', (data) => {
+        const chunk = data.toString();
+        stdout += chunk;
+        if (mainWindow) mainWindow.webContents.send('terminal-data', { terminalId, data: chunk });
+    });
+
+    proc.stderr.on('data', (data) => {
+        const chunk = data.toString();
+        stderr += chunk;
+        if (mainWindow) mainWindow.webContents.send('terminal-data', { terminalId, data: chunk });
+    });
+
+    proc.on('close', (code) => {
+        if (terminalProcesses.get(terminalId) === proc) {
+            terminalProcesses.delete(terminalId);
+        }
+        if (resolve) {
+            resolve({
+                success: code === 0,
+                stdout,
+                stderr,
+                error: code !== 0 ? `Process exited with code ${code}` : null
+            });
+        }
+    });
+
+    return proc;
+};
+
+// Shell
+ipcMain.handle('execute-command', (event, { terminalId, command }) => {
+    return new Promise((resolve) => {
+        // Improved CD tracking from Agent execution
+        const cdRegex = /(?:^|&&|&|\|\||\|)\s*cd\s+("[^"]*"|'[^']*'|[^\s&|]+)/gi;
+        let match;
+        const workspace = store.get('workspacePath');
+        let currentCwd = terminalCwds.get(terminalId) || workspace;
+
+        while ((match = cdRegex.exec(command)) !== null) {
+            const target = match[1].replace(/^["']|["']$/g, '').trim();
+            try {
+                const newPath = path.resolve(currentCwd, target);
+                if (fs.existsSync(newPath) && fs.statSync(newPath).isDirectory()) {
+                    currentCwd = newPath;
+                    terminalCwds.set(terminalId, currentCwd);
+                }
+            } catch (e) {
+                console.error("Failed to resolve Agent CD path", e);
+            }
+        }
+
+        const proc = runCommand(command, terminalId, resolve);
+
+        const longRunningCmds = ['npm start', 'npm run dev', 'vite', 'serve', 'node '];
+        if (longRunningCmds.some(c => command.includes(c))) {
+            setTimeout(() => {
+                resolve({ success: true, stdout: 'Command started in background...', stderr: '', isBackground: true });
+            }, 2000);
+        }
+    });
+});
+
+ipcMain.handle('terminal-input', (event, { terminalId, input }) => {
+    const trimmedInput = input.trim();
+    const workspace = store.get('workspacePath');
+    let cwd = terminalCwds.get(terminalId) || workspace;
+
+    // Simple CD tracking
+    if (trimmedInput.startsWith('cd ')) {
+        const target = trimmedInput.slice(3).trim().replace(/^["']|["']$/g, '');
+        try {
+            const newPath = path.resolve(cwd, target);
+            if (fs.existsSync(newPath) && fs.statSync(newPath).isDirectory()) {
+                terminalCwds.set(terminalId, newPath);
+            }
+        } catch (e) {
+            console.error("Failed to resolve CD path", e);
+        }
+    }
+
+    const activeProcess = terminalProcesses.get(terminalId);
+    if (activeProcess && activeProcess.stdin.writable) {
+        activeProcess.stdin.write(input + '\n');
+        return true;
+    } else {
+        runCommand(input, terminalId);
+        return true;
+    }
+});
+
+ipcMain.handle('get-terminal-cwd', (event, terminalId) => {
+    return terminalCwds.get(terminalId) || store.get('workspacePath');
+});
+
+ipcMain.handle('set-terminal-cwd', (event, { terminalId, newPath }) => {
+    if (fs.existsSync(newPath) && fs.statSync(newPath).isDirectory()) {
+        terminalCwds.set(terminalId, newPath);
+        return { success: true, path: newPath };
+    }
+    return { success: false, error: "Invalid directory path" };
+});
+
+ipcMain.handle('close-terminal', (event, terminalId) => {
+    const proc = terminalProcesses.get(terminalId);
+    if (proc) {
+        proc.kill();
+        terminalProcesses.delete(terminalId);
+    }
+    terminalCwds.delete(terminalId);
+    return true;
+});
+
+// Token Usage
+ipcMain.handle('get-token-usage', () => {
+    return store.get('tokenUsage', { session: 0, total: 0 });
+});
+
+ipcMain.handle('update-token-usage', (event, usage) => {
+    const current = store.get('tokenUsage', { session: 0, total: 0 });
+    const updated = {
+        session: current.session + usage,
+        total: current.total + usage
+    };
+    store.set('tokenUsage', updated);
+    return updated;
+});
+
+// History / Sessions
+ipcMain.handle('get-sessions', () => {
+    return store.get('sessions', []);
+});
+
+ipcMain.handle('save-sessions', (event, sessions) => {
+    store.set('sessions', sessions);
+    return true;
+});
+
+// Chat Persistence
+ipcMain.handle('get-chats', () => {
+    return store.get('chats', []);
+});
+
+ipcMain.handle('save-chats', (event, chats) => {
+    store.set('chats', chats);
+    return true;
+});
+
+ipcMain.handle('get-active-chat-id', () => {
+    return store.get('activeChatId', null);
+});
+
+ipcMain.handle('save-active-chat-id', (event, id) => {
+    store.set('activeChatId', id);
+    return true;
+});
+
+ipcMain.handle('get-open-chat-ids', () => {
+    return store.get('openChatIds', []);
+});
+
+ipcMain.handle('save-open-chat-ids', (event, ids) => {
+    store.set('openChatIds', ids);
+    return true;
+});
+
+// Window Controls
+ipcMain.handle('window-minimize', () => {
+    mainWindow.minimize();
+});
+
+ipcMain.handle('window-maximize', () => {
+    if (mainWindow.isMaximized()) {
+        mainWindow.unmaximize();
+    } else {
+        mainWindow.maximize();
+    }
+});
+
+ipcMain.handle('window-close', () => {
+    mainWindow.close();
+});
+
+const togetherControllers = new Map();
+
+ipcMain.handle('abort-together-chat', (event, requestId) => {
+    const controller = togetherControllers.get(requestId);
+    if (controller) {
+        controller.abort();
+        togetherControllers.delete(requestId);
+        return true;
+    }
+    return false;
+});
+
+// Together AI Proxy with Retry Logic
+ipcMain.handle('together-proxy-chat', async (event, { messages, model, stream, requestId }) => {
+    const fetchWithRetry = async (url, options, retries = 3, backoff = 1000) => {
+        try {
+            const response = await fetch(url, options);
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                const errorMessage = errorData.error?.message || `Together API error: ${response.status}`;
+
+                // Retry on rate limits (429) or server errors (5xx)
+                if (retries > 0 && (response.status === 429 || response.status >= 500)) {
+                    console.warn(`Together Proxy Retry ${4 - retries} due to ${response.status}: ${errorMessage}`);
+                    await new Promise(r => setTimeout(r, backoff));
+                    return fetchWithRetry(url, options, retries - 1, backoff * 2);
+                }
+
+                throw new Error(errorMessage);
+            }
+            return response;
+        } catch (error) {
+            if (error.name === 'AbortError') throw error;
+
+            // Retry on network-level errors/timeouts
+            if (retries > 0 && (
+                error.name === 'ConnectTimeoutError' ||
+                error.name === 'TypeError' ||
+                error.message.includes('timeout') ||
+                error.message.includes('fetch')
+            )) {
+                console.warn(`Together Proxy Retry ${4 - retries} due to Network Error: ${error.message}`);
+                await new Promise(r => setTimeout(r, backoff));
+                return fetchWithRetry(url, options, retries - 1, backoff * 2);
+            }
+            throw error;
+        }
+    };
+
+    const controller = new AbortController();
+    togetherControllers.set(requestId, controller);
+
+    try {
+        const userKey = store.get('togetherKey');
+        const finalKey = TOGETHER_MASTER_KEY || userKey;
+
+        if (!finalKey) {
+            throw new Error("Together AI key missing. Please provide one in settings.");
+        }
+
+        const response = await fetchWithRetry("https://api.together.xyz/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${finalKey}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                model: model.replace('together/', ''),
+                messages,
+                stream: !!stream
+            }),
+            signal: controller.signal
+        });
+
+        if (stream) {
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+
+            (async () => {
+                try {
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        const chunk = decoder.decode(value, { stream: true });
+                        if (mainWindow && !mainWindow.isDestroyed()) {
+                            mainWindow.webContents.send(`together-chunk-${requestId}`, chunk);
+                        }
+                    }
+                    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(`together-done-${requestId}`);
+                } catch (err) {
+                    if (err.name === 'AbortError') {
+                        console.log(`Together stream ${requestId} aborted`);
+                    } else {
+                        console.error("Stream reader error:", err);
+                        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(`together-error-${requestId}`, err.message);
+                    }
+                } finally {
+                    reader.releaseLock();
+                    togetherControllers.delete(requestId);
+                }
+            })();
+
+            return { streaming: true };
+        } else {
+            const data = await response.json();
+            togetherControllers.delete(requestId);
+            return data;
+        }
+    } catch (error) {
+        togetherControllers.delete(requestId);
+        if (error.name === 'AbortError') {
+            console.log(`Together proposal ${requestId} aborted`);
+            return { aborted: true };
+        }
+        console.error("Together Proxy Error:", error);
+        throw error;
+    }
+});
