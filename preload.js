@@ -39,6 +39,10 @@ contextBridge.exposeInMainWorld('api', {
     getOpenChatIds: () => ipcRenderer.invoke('get-open-chat-ids'),
     saveOpenChatIds: (ids) => ipcRenderer.invoke('save-open-chat-ids', ids),
 
+    // Editor State
+    getEditorState: () => ipcRenderer.invoke('get-editor-state'),
+    saveEditorState: (state) => ipcRenderer.invoke('save-editor-state', state),
+
     // Window Controls
     minimize: () => ipcRenderer.invoke('window-minimize'),
     maximize: () => ipcRenderer.invoke('window-maximize'),

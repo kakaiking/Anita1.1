@@ -40,6 +40,8 @@ const Sparkles = 'sparkles';
 const Copy = 'copy';
 const ShieldCheck = 'shield-check';
 const Users = 'users';
+const Eye = 'eye';
+const Monitor = 'monitor';
 
 const getFileIcon = (name) => {
     const lowerName = name.toLowerCase();
@@ -564,182 +566,24 @@ const Markdown = ({ content, timestamp }) => {
     );
 };
 
-// --- AGENT STATE LOGIC ---
+// --- SIMPLIFIED AGENT LOGIC (NO HARDCODED CONSTRAINTS) ---
 const AGENT_MODES = {
     CHAT: 'chat',
-    CLARIFY: 'clarify',
-    HANDOFF: 'handoff',
-    PLAN: 'plan',
-    AUTONOMOUS: 'autonomous'
+    AUTONOMOUS: 'autonomous',
+    FILE_EDIT: 'file_edit'
 };
 
-const AGENT_PROMPTS = {
-    [AGENT_MODES.CHAT]: `You are Anita, an elite AI coding assistant.
-CORE BEHAVIOR:
-- Answer questions accurately and concisely.
-- If the user asks for code explanation, explain it.
-- If the user asks for a code snippet, provide it in markdown.
-- DO NOT generate full project implementation plans or JSON tasks in this mode.
-- If the user intent shifts to "building a project", TRANSITION to Clarification mode by asking questions.`,
+// No hardcoded prompts - direct AI communication
+const AGENT_PROMPTS = {};
 
-    [AGENT_MODES.CLARIFY]: `You find yourself in specific need of details. The user wants to build something, but the request is too vague.
-CORE BEHAVIOR:
-- DO NOT assume requirements.
-- DO NOT generate code snippets or templates yet.
-- Ask 3-4 specific technical questions (e.g., "What framework?", "Desired color scheme?", "Database preferences?").
-- Keep the tone helpful and eager.
-- DO NOT output JSON.`,
-
-    [AGENT_MODES.HANDOFF]: `You have the requirements. Now, confirm with the user.
-CORE BEHAVIOR:
-- Summarize the user's request in a bulleted list.
-- CRITICAL: DO NOT GENERATE CODE BLOCKS, XML, or pseudo-code in this phase.
-- DO NOT show the "Structure" or "Implementation Plan" details yet. Just the features.
-- Explicitly ask: "Shall I generate the implementation plan now?"
-- wait for the user to say "Yes".`,
-
-    [AGENT_MODES.PLAN]: `You are the Lead Architect. Generate the implementation plan.
-CORE BEHAVIOR:
-- CRITICAL: Output ONLY valid JSON.
-- DO NOT start with "Sure", "Here is the plan", or any conversational text.
-- START YOUR RESPONSE IMMEDIATELY WITH "{".
-- NO markdown text before or after the JSON.
-
-JSON ESCAPING (ABSOLUTELY CRITICAL):
-- ALL file content MUST be a SINGLE-LINE JSON string
-- Use \\\\n (double backslash n) for EVERY newline in code
-- Use \\\\\" (double backslash quote) for quotes inside strings
-- NEVER use actual newlines in the "content" field
-- Example CORRECT: "content": "import React from 'react';\\\\n\\\\nfunction App() {\\\\n  return <div>Hello</div>;\\\\n}"
-- Example WRONG: "content": "\\nimport React...\\n" (actual newlines = invalid JSON)
-
-DIRECTORY AWARENESS (CRITICAL):
-- You START in the workspace root directory.
-- The terminal state DOES NOT PERSIST between tasks reliably. 
-- ALWAYS assume you are in the root workspace folder for every new "command" task unless you explicitly chain commands.
-- YOU MUST CHAIN 'cd' COMMANDS for any action in a subfolder.
-- Example: "cd project-name && npm install"
-- Example: "cd project-name && npm run build"
-- NEVER assume a previous "cd" command stays in effect for the next task's command.
-- ALWAYS use explicit paths or chained 'cd' commands.
-
-VITE PROJECT CREATION (CRITICAL):
-Step-by-step for Vite projects:
-1. Check workspace: "dir"
-2. Create project: "npm create vite@latest project-name -- --template react"
-3. IMMEDIATELY cd and install: "cd project-name && npm install" (single command!)
-4. Install additional deps: "cd project-name && npm install react-router-dom lucide-react" (CHAINED CD!)
-5. Then create files using paths like "src/App.jsx", "src/pages/Home.jsx" (relative from project root)
-
-WINDOWS CMD RULES:
-- Combine related commands with &&: "cd folder && npm install && npm run build"
-- NEVER use 'pwd', 'ls', 'rm'. Use 'cd', 'dir', 'del /s /q'
-- Non-interactive only: never suggest commands that wait for input
-
-FILE PATHS:
-- For "file_edit" tasks, if the project is in a subfolder, include the subfolder in the path.
-- Example: "project-name/src/App.jsx"
-- OR ensure the agent knows relative paths are from workspace root.
-- WAIT: To be safe, always use the FULL RELATIVE PATH from workspace root for file edits.
-- Example: if project is "myapp", file path is "myapp/src/App.jsx".
-
-STRICT JSON TEMPLATE:
-{
-  "thoughts": "Surgical analysis of the goal and step-by-step reasoning",
-  "plan": "Project Strategy Name",
-  "tasks": [
-    { "id": 1, "description": "Check workspace", "type": "terminal", "command": "dir" },
-    { "id": 2, "description": "Create Vite project", "type": "terminal", "command": "npm create vite@latest project-name -- --template react" },
-    { "id": 3, "description": "Install dependencies", "type": "terminal", "command": "cd project-name && npm install && npm install react-router-dom lucide-react" },
-    { "id": 4, "description": "Create Home page", "type": "file_edit", "path": "project-name/src/pages/Home.jsx", "content": "import React from 'react';\\\\n\\\\nfunction Home() {\\\\n  return <div>Home Page</div>;\\\\n}\\\\n\\\\nexport default Home;" }
-  ]
-}`
-};
-
-AGENT_PROMPTS[AGENT_MODES.AUTONOMOUS] = `You are an Autonomous AI Developer. You are building a web application for the user.
-Your goal is to complete the user's request by executing a series of steps.
-
-AVAILABLE TOOLS:
-1. READ_FILE(path): Read content of a file.
-2. WRITE_FILE(path, content): Create or overwrite a file.
-3. LIST_DIR(path): List files in a directory.
-4. RUN_COMMAND(command): Run a terminal command (Windows PowerShell/CMD).
-5. ASK_USER(question): Ask the user for clarification (stops the loop).
-6. DONE: Signal that the task is complete.
-
-CORE RULES:
-- YOU ARE IN A LOOP. Output ONE step at a time.
-- Verify your work. If you write a file, you might want to read it back or run a build to check for errors.
-- If you encounter an error, READ the error, THINK about the fix, and APPLY it.
-- Do NOT hallucinate variables or imports. CHECK file definitions.
-- "Vibe Coding" means you take ownership. Don't be timid. Build it.
-- ALWAYS maintain a running context of where you are in the project structure.
-- Directories: Check if a directory exists BEFORE creating it (use LIST_DIR).
-- If the project directory already exists, navigate into it (implicit context for file paths).
-- Do NOT create duplicate folders (e.g. \`myapp/myapp\` or \`project/vite-project\`).
-- Flatten your structure. Ideally, the root of the repo is the root of the project.
-
-RESPONSE FORMAT (STRICT JSON):
-{
-  "thoughts": "I need to check if the project exists first...",
-  "tool": "LIST_DIR",
-  "args": ["."]
-}
-OR
-{
-  "thoughts": "The build failed. I need to fix the syntax error in App.js...",
-  "tool": "WRITE_FILE",
-  "args": ["src/App.js", "...corrected content..."]
-}
-OR
-{
-  "thoughts": "I have finished building the app.",
-  "tool": "DONE"
-}
-`;
-
-const detectAgentIntent = (input, history) => {
-    if (!input) return AGENT_MODES.CHAT;
-    const text = input.trim().toLowerCase();
-
-    // 1. Check Previous AI Message for Handoff Question
-    if (history && history.length > 0) {
-        const lastAiMsg = history[history.length - 1];
-        if (lastAiMsg.role === 'assistant' &&
-            (lastAiMsg.content.includes("Shall I generate") || lastAiMsg.content.includes("implementation plan now?"))) {
-
-            // A) CONFIRMATION: User says "Yes" -> AUTONOMOUS
-            if (text.match(/^(yes|yep|yeah|sure|do it|go ahead|create plan|build|vibe)/i)) {
-                return AGENT_MODES.AUTONOMOUS;
-            }
-
-            // A.2) IMPLICIT CONFIRMATION WITH INSTRUCTIONS: User gives commands like "Use Vite", "Critical:", "Start"
-            // If they are responding to "Shall I generate?", these mean YES.
-            if (text.match(/\b(use|start|create|critical|ensure|make|build|implement)\b/i)) {
-                return AGENT_MODES.AUTONOMOUS;
-            }
-
-            // B) MODIFICATION: User adds more details ("add footer", "change color") -> LOOP HANDOFF
-            // If they didn't say yes, but are adding requirements, we simply re-confirm.
-            if (text.match(/^(add|include|make|change|also|and|with)\s+/i) || text.split(' ').length > 3) {
-                return AGENT_MODES.HANDOFF;
-            }
-        }
+// Intent detection: Return AUTONOMOUS when in agent mode, otherwise CHAT
+const detectAgentIntent = (goal, messages, composerMode) => {
+    // If explicitly in agent mode, return AUTONOMOUS
+    if (composerMode === 'agent') {
+        return AGENT_MODES.AUTONOMOUS;
     }
 
-    // 2. High Intent Keywords
-    // Match "create/make/build" even if it's not the very first word (e.g. "I want to build...")
-    if (text.match(/\b(build|create|make|setup|generate|scaffold)\b/i)) {
-
-        // HEURISTIC: Short + Vague = clarify
-        if (text.split(' ').length < 15 && !text.includes('page') && !text.includes('component') && !text.includes('function')) {
-            return AGENT_MODES.CLARIFY;
-        }
-        // If detailed, maybe Handoff immediately? 
-        // Safer to always Handoff to confirm understanding.
-        return AGENT_MODES.HANDOFF;
-    }
-
+    // Otherwise, default to CHAT
     return AGENT_MODES.CHAT;
 };
 // -------------------------
@@ -764,7 +608,7 @@ class AIService {
         return this.settings.apiKey;
     }
 
-    async chat(messages, onStream, signal, overrideModel) {
+    async chat(messages, onStream, signal, overrideModel, tools = null) {
         const activeModel = overrideModel || this.model;
 
         if (activeModel.startsWith('together/')) {
@@ -849,13 +693,16 @@ class AIService {
         const baseUrl = this.getBaseUrl();
         const model = activeModel;
 
-        const systemMsg = {
-            role: "system",
-            content: "You are a professional coding assistant. The user is on Windows. CRITICAL: Always wrap any code snippets in standard Markdown triple backticks with a language identifier. For file operations, prioritize the 'file_edit' task type. For terminal commands, ensure compatibility with Windows CMD/PowerShell (avoid bash-specific syntax like '<<' or 'export')."
-        };
+        // Validate API key before making request
+        if (!apiKey || apiKey.trim() === '') {
+            const providerName = this.model.startsWith('together/') ? 'Together AI' : 'OpenRouter';
+            throw new Error(`${providerName} API key is missing. Please configure your API key in Settings (gear icon).`);
+        }
 
+        // Pass messages directly without hardcoded system constraints
         const hasSystem = messages.some(m => m.role === 'system');
-        const finalMessages = hasSystem ? messages : [systemMsg, ...messages];
+        const finalMessages = messages; // Direct pass-through
+
 
         try {
             const response = await fetch(`${baseUrl}/chat/completions`, {
@@ -871,13 +718,41 @@ class AIService {
                     model: model,
                     messages: finalMessages,
                     stream: !!onStream,
-                    max_tokens: 8192
+                    max_tokens: 8192,
+                    tools: tools,                           // Add tools support
+                    tool_choice: tools ? "auto" : undefined // Let AI decide when to use tools
                 })
             });
 
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({}));
-                throw new Error(errorData.error?.message || `HTTP error! status: ${response.status}`);
+                const errorMessage = errorData.error?.message || errorData.message || `HTTP ${response.status}`;
+
+                // Log full error for debugging
+                console.error('Provider Error Details:', {
+                    status: response.status,
+                    statusText: response.statusText,
+                    errorData,
+                    model,
+                    baseUrl
+                });
+
+                // Provide user-friendly error messages based on status code
+                if (response.status === 401) {
+                    const providerName = baseUrl.includes('openrouter') ? 'OpenRouter' : 'Together AI';
+                    const keyUrl = baseUrl.includes('openrouter')
+                        ? 'https://openrouter.ai/keys'
+                        : 'https://api.together.xyz/settings/api-keys';
+                    throw new Error(`Authentication failed: Invalid ${providerName} API key.\n\n⚠️ Note: This app uses ${providerName}, not OpenAI directly.\nGet your ${providerName} API key from: ${keyUrl}`);
+                } else if (response.status === 403) {
+                    throw new Error(`Access forbidden: Your API key may not have access to this model (${model}).\n\nTry selecting a different model in Settings.`);
+                } else if (response.status === 429) {
+                    throw new Error(`Rate limit exceeded: Too many requests. Please wait a moment and try again.`);
+                } else if (response.status >= 500) {
+                    throw new Error(`Provider server error (${response.status}): The AI service is experiencing issues. Please try again later.`);
+                } else {
+                    throw new Error(`Provider error (${response.status}): ${errorMessage}\n\nFull error: ${JSON.stringify(errorData)}`);
+                }
             }
 
             if (onStream) {
@@ -925,6 +800,12 @@ class AIService {
 
                 if (data.usage) {
                     window.api.updateTokenUsage(data.usage.total_tokens);
+                }
+
+                // Return full response when tools are used (to access tool_calls)
+                // Return just content for regular chat (backward compatible)
+                if (tools) {
+                    return data;
                 }
                 return data.choices[0].message.content;
             }
@@ -1042,6 +923,289 @@ const ChatStatus = ({ status }) => {
     );
 };
 
+// ========================
+// PROJECT WIZARD MODAL
+// ========================
+const ProjectWizardModal = ({ isOpen, onClose, onCreateProject }) => {
+    const [selectedFramework, setSelectedFramework] = useState(null);
+    const [projectName, setProjectName] = useState('');
+    const frameworks = window.FrameworkTemplates?.getAllFrameworks() || [];
+
+    if (!isOpen) return null;
+
+    const handleCreate = () => {
+        if (selectedFramework && projectName.trim()) {
+            onCreateProject(selectedFramework, projectName.trim());
+            setSelectedFramework(null);
+            setProjectName('');
+            onClose();
+        }
+    };
+
+    return (
+        <div className="project-wizard-overlay" onClick={onClose}>
+            <div className="project-wizard-modal" onClick={(e) => e.stopPropagation()}>
+                <div className="project-wizard-header">
+                    <h2>
+                        <Icon name="folder-plus" size={20} />
+                        Create New Project
+                    </h2>
+                    <button className="project-wizard-close" onClick={onClose}>
+                        <Icon name="x" size={18} />
+                    </button>
+                </div>
+
+                <div className="project-wizard-content">
+                    <div className="project-wizard-section">
+                        <label>Project Name</label>
+                        <input
+                            type="text"
+                            className="project-name-input"
+                            placeholder="my-awesome-project"
+                            value={projectName}
+                            onChange={(e) => setProjectName(e.target.value.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''))}
+                            autoFocus
+                        />
+                    </div>
+
+                    <div className="project-wizard-section">
+                        <label>Choose Framework</label>
+                        <div className="framework-grid">
+                            {frameworks.map(fw => (
+                                <div
+                                    key={fw.id}
+                                    className={`framework-card ${selectedFramework?.id === fw.id ? 'selected' : ''}`}
+                                    onClick={() => setSelectedFramework(fw)}
+                                >
+                                    <div className="framework-icon" style={{ backgroundColor: `${fw.color}20`, color: fw.color }}>
+                                        <Icon name={fw.icon} size={24} />
+                                    </div>
+                                    <span className="framework-name">{fw.name}</span>
+                                    <span className="framework-desc">{fw.description}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="project-wizard-footer">
+                    <button className="wizard-btn wizard-btn-secondary" onClick={onClose}>
+                        Cancel
+                    </button>
+                    <button
+                        className="wizard-btn wizard-btn-primary"
+                        onClick={handleCreate}
+                        disabled={!selectedFramework || !projectName.trim()}
+                    >
+                        <Icon name="sparkles" size={16} />
+                        Create Project
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// ========================
+// GETTING STARTED TAB
+// ========================
+const GettingStartedTab = ({ framework, projectName, onCopyCommand, onOpenTerminal }) => {
+    if (!framework) return null;
+
+    const formatCommand = (cmd) => {
+        return window.FrameworkTemplates?.formatCommand(cmd, projectName) || cmd;
+    };
+
+    const copyToClipboard = (text) => {
+        navigator.clipboard.writeText(text);
+        if (onCopyCommand) onCopyCommand(text);
+    };
+
+    return (
+        <div className="getting-started-container">
+            <div className="getting-started-header">
+                <div className="getting-started-framework">
+                    <div
+                        className="framework-badge"
+                        style={{ backgroundColor: `${framework.color}20`, color: framework.color }}
+                    >
+                        <Icon name={framework.icon} size={18} />
+                        {framework.name}
+                    </div>
+                </div>
+                <h1>Get Started with {projectName}</h1>
+                <p>Follow these steps to set up your development environment</p>
+            </div>
+
+            <div className="setup-steps">
+                {framework.installSteps.map((step, index) => (
+                    <div key={step.id} className="setup-step">
+                        <div className="setup-step-header">
+                            <div className="step-number">{index + 1}</div>
+                            <h3>{step.title}</h3>
+                        </div>
+
+                        <div className="setup-step-content">
+                            {step.description && <p>{step.description}</p>}
+
+                            {step.type === 'download' && step.url && (
+                                <a
+                                    href={step.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="step-link"
+                                    onClick={(e) => {
+                                        e.preventDefault();
+                                        window.api?.openExternal?.(step.url) || window.open(step.url, '_blank');
+                                    }}
+                                >
+                                    <Icon name="external-link" size={14} />
+                                    {step.url.replace('https://', '').split('/')[0]}
+                                </a>
+                            )}
+
+                            {step.type === 'env' && step.steps && (
+                                <ul className="env-steps">
+                                    {step.steps.map((s, i) => <li key={i}>{s}</li>)}
+                                </ul>
+                            )}
+
+                            {step.type === 'terminal' && step.command && (
+                                <div className="step-command">
+                                    <code>{formatCommand(step.command)}</code>
+                                    <button
+                                        className="copy-command-btn"
+                                        onClick={() => copyToClipboard(formatCommand(step.command))}
+                                    >
+                                        <Icon name="copy" size={12} />
+                                        Copy
+                                    </button>
+                                </div>
+                            )}
+
+                            {step.expectedOutput && (
+                                <p style={{ opacity: 0.6, fontSize: 12, marginTop: 8 }}>
+                                    ℹ️ {step.expectedOutput}
+                                </p>
+                            )}
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+// @-Mention Autocomplete Dropdown Component
+const MentionAutocomplete = ({ files, query, position, selectedIndex, onSelect, onClose, onIndexChange }) => {
+    const dropdownRef = useRef(null);
+
+    // Filter files based on query
+    const filteredFiles = useMemo(() => {
+        if (!files || files.length === 0) return [];
+
+        // Flatten file tree to get all files
+        const flattenFiles = (fileList, parentPath = '') => {
+            let result = [];
+            fileList.forEach(file => {
+                const relativePath = parentPath ? `${parentPath}/${file.name}` : file.name;
+                if (!file.isDirectory) {
+                    result.push({
+                        name: file.name,
+                        path: file.path,
+                        relativePath: relativePath
+                    });
+                }
+                if (file.children && file.children.length > 0) {
+                    result = result.concat(flattenFiles(file.children, relativePath));
+                }
+            });
+            return result;
+        };
+
+        const allFiles = flattenFiles(files);
+
+        if (!query) return allFiles.slice(0, 10);
+
+        const lowerQuery = query.toLowerCase();
+        return allFiles
+            .filter(f =>
+                f.name.toLowerCase().includes(lowerQuery) ||
+                f.relativePath.toLowerCase().includes(lowerQuery)
+            )
+            .slice(0, 10);
+    }, [files, query]);
+
+    // Keyboard navigation
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if (!position) return;
+
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                onIndexChange(Math.min(selectedIndex + 1, filteredFiles.length - 1));
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                onIndexChange(Math.max(selectedIndex - 1, 0));
+            } else if (e.key === 'Enter' && filteredFiles.length > 0) {
+                e.preventDefault();
+                onSelect(filteredFiles[selectedIndex]);
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                onClose();
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [position, selectedIndex, filteredFiles, onSelect, onClose, onIndexChange]);
+
+    // Click outside to close
+    useEffect(() => {
+        const handleClickOutside = (e) => {
+            if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+                onClose();
+            }
+        };
+
+        if (position) {
+            document.addEventListener('mousedown', handleClickOutside);
+            return () => document.removeEventListener('mousedown', handleClickOutside);
+        }
+    }, [position, onClose]);
+
+    if (!position || filteredFiles.length === 0) return null;
+
+    return (
+        <div
+            ref={dropdownRef}
+            className="mention-autocomplete glass"
+            style={{
+                position: 'fixed',
+                top: position.top,
+                left: position.left,
+                zIndex: 10000
+            }}
+        >
+            {filteredFiles.map((file, index) => {
+                const icon = getFileIcon(file.name);
+                return (
+                    <div
+                        key={file.path}
+                        className={`mention-item ${index === selectedIndex ? 'selected' : ''}`}
+                        onClick={() => onSelect(file)}
+                        onMouseEnter={() => onIndexChange(index)}
+                    >
+                        <Icon name={icon.name} size={14} style={{ color: icon.color }} />
+                        <span className="mention-name">{file.name}</span>
+                        <span className="mention-path">{file.relativePath}</span>
+                    </div>
+                );
+            })}
+        </div>
+    );
+};
+
 const App = () => {
     const [workspace, setWorkspace] = useState(null);
     const [files, setFiles] = useState([]);
@@ -1078,14 +1242,14 @@ const App = () => {
 
     // Layout State
     const [isLeftSidebarVisible, setIsLeftSidebarVisible] = useState(true);
-    const [isRightPanelVisible, setIsRightPanelVisible] = useState(true);
-    const [isTerminalVisible, setIsTerminalVisible] = useState(false);
+    const [isRightPanelVisible, setIsRightPanelVisible] = useState(false);
+    const [isTerminalVisible, setIsTerminalVisible] = useState(true);
     const [sidebarWidth, setSidebarWidth] = useState(260);
     const [rightPanelWidth, setRightPanelWidth] = useState(380);
     const [terminalHeight, setTerminalHeight] = useState(240);
     const [resizing, setResizing] = useState(null); // 'left', 'right', 'bottom'
     const [isHistorySidebarVisible, setIsHistorySidebarVisible] = useState(false);
-    const [isCentralPanelVisible, setIsCentralPanelVisible] = useState(false);
+    const [isCentralPanelVisible, setIsCentralPanelVisible] = useState(true);
     const [tokenUsage, setTokenUsage] = useState({ session: 0, total: 0 });
     const [expandedFolders, setExpandedFolders] = useState(new Set());
     const [terminals, setTerminals] = useState([{
@@ -1099,11 +1263,32 @@ const App = () => {
     }]);
     const [activeTerminalId, setActiveTerminalId] = useState('t1');
     const [composerMode, setComposerMode] = useState('chat');
+
+    // @-Mention Autocomplete State
+    const [previewFile, setPreviewFile] = useState(null);
+    const [hoveredTab, setHoveredTab] = useState(null);
+    const [isDevServerRunning, setIsDevServerRunning] = useState(false);
+    const [devServerUrl, setDevServerUrl] = useState(null);
+    const [devServerTerminalId, setDevServerTerminalId] = useState(null);
+    const [mentionQuery, setMentionQuery] = useState(null); // { query: 'in', startIndex: 5 }
+    const [mentionDropdownPosition, setMentionDropdownPosition] = useState(null); // { top, left }
+    const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
+
     const [creatingItem, setCreatingItem] = useState(null); // { parentPath, type }
     const [renamingItem, setRenamingItem] = useState(null); // { path, oldName }
     const [explorerMenuOpen, setExplorerMenuOpen] = useState(false);
     const [isTerminalHeaderExpanded, setIsTerminalHeaderExpanded] = useState(true);
     const [confirmDialog, setConfirmDialog] = useState(null); // { title, message, onConfirm, onCancel, confirmText, cancelText, type }
+
+    // Project Wizard State
+    const [showProjectWizard, setShowProjectWizard] = useState(false);
+    const [selectedFramework, setSelectedFramework] = useState(null);
+    const [projectName, setProjectName] = useState('');
+    const [gettingStartedTab, setGettingStartedTab] = useState(null); // { framework, projectName }
+
+    // File-Scoped Chat State
+    const [fileChats, setFileChats] = useState({}); // { [filePath]: chatObject }
+    const [activeFileChatPath, setActiveFileChatPath] = useState(null);
 
     const handleStop = (chatId = activeChatId) => {
         if (abortControllersRef.current[chatId]) {
@@ -1152,10 +1337,97 @@ const App = () => {
     const editorContainerRef = useRef(null);
     const terminalInputRef = useRef(null);
     const composerRef = useRef(null);
-    const ai = useMemo(() => new AIService(settings), [settings.apiKey, settings.model]);
+
+    // Refs for safe access in callbacks/commands
+    const activeFileRef = useRef(activeFile);
+    const saveFileRef = useRef(null); // Will be assigned via effect
+
+    useEffect(() => { activeFileRef.current = activeFile; }, [activeFile]);
+    // saveFileRef is updated in a separate effect below since saveFile is defined later
+
+    const ai = useMemo(() => {
+        console.log('DEBUG: Creating AIService with key length:', settings.apiKey?.length, 'Model:', settings.model);
+        if (!settings.apiKey) console.warn('DEBUG: API Key is missing!');
+        return new AIService(settings);
+    }, [settings.apiKey, settings.model]);
+
+    // AgentManager for function calling
+    const agentManagerRef = useRef(null);
+
+    // Helper to refresh active file content from disk
+    const refreshActiveFile = async () => {
+        if (!activeFile || !monacoRef.current) return;
+        try {
+            const content = await window.api.readFile(activeFile);
+
+            // Update Monaco Model
+            const models = window.monaco.editor.getModels();
+            const uri = window.monaco.Uri.file(activeFile.replace(/\\/g, '/'));
+            const model = models.find(m => m.uri.toString() === uri.toString());
+
+            if (model) {
+                const currentContent = model.getValue();
+                if (currentContent !== content) {
+                    // Update content only if changed to preserve cursor if possible (though setValue resets it)
+                    // For full file replacements, setValue is appropriate
+                    model.setValue(content);
+                }
+            }
+
+            // Update Tabs State
+            setTabs(prev => prev.map(t =>
+                t.path === activeFile ? { ...t, content, isDirty: false } : t
+            ));
+
+        } catch (e) {
+            console.error("Failed to refresh active file:", e);
+        }
+    };
+
+    // Initialize Instance whenever AI changes (Class is now global window.AgentManager)
+    useEffect(() => {
+        if (settings.apiKey && window.AgentManager && ai) {
+            console.log("Initializing new AgentManager instance");
+            try {
+                agentManagerRef.current = new window.AgentManager(ai, {
+                    addLog: (msg) => addLog(null, msg),
+                    updateUI: () => setChats(prev => [...prev]),
+                    updateSession: (sessionId, updates) => {
+                        setChats(prev => prev.map(c => ({
+                            ...c,
+                            agentSessions: (c.agentSessions || []).map(s =>
+                                s.id === sessionId ? { ...s, ...updates } : s
+                            )
+                        })));
+                    },
+                    loadFiles: (workspace) => loadFiles(workspace),
+                    refreshActiveFile: () => refreshActiveFile()
+                });
+                console.log("AgentManager initialized successfully");
+            } catch (err) {
+                console.error("Error creating AgentManager:", err);
+            }
+        }
+    }, [settings.apiKey, ai, activeFile]); // Added activeFile dependency so closure captures current activeFile
 
     const updateChat = (chatId, updates) => {
         setChats(prev => prev.map(c => c.id === chatId ? { ...c, ...updates } : c));
+    };
+
+    const clearChat = (chatId) => {
+        setChats(prev => prev.map(c => c.id === chatId ? {
+            ...c,
+            messages: [],
+            agentSessions: [],
+            lastUpdatedAt: Date.now()
+        } : c));
+
+        // Focus the composer input after clearing
+        setTimeout(() => {
+            if (composerRef.current) {
+                composerRef.current.focus();
+            }
+        }, 100);
     };
 
     const [showScrollUp, setShowScrollUp] = useState(false);
@@ -1357,6 +1629,15 @@ const App = () => {
 
                     setTerminals(prev => prev.map(t => {
                         if (t.id === terminalId) {
+                            // URL Sniffing for Dev Server
+                            if (isDevServerRunning && !devServerUrl) {
+                                const urlMatch = cleanData.match(/http:\/\/localhost:\d+/);
+                                if (urlMatch) {
+                                    setDevServerUrl(urlMatch[0]);
+                                    addLog(null, `Dev Server detected at ${urlMatch[0]}`, 'info');
+                                }
+                            }
+
                             const lastLog = t.logs[t.logs.length - 1];
                             if (lastLog && lastLog.type === 'terminal' && (Date.now() - lastLog.timestamp < 1000)) {
                                 const newLogs = [...t.logs];
@@ -1552,6 +1833,13 @@ const App = () => {
                         }
                     });
 
+                    // Global Save Command
+                    monacoRef.current.addCommand(window.monaco.KeyMod.CtrlCmd | window.monaco.KeyCode.KeyS, () => {
+                        if (activeFileRef.current && saveFileRef.current) {
+                            saveFileRef.current(activeFileRef.current);
+                        }
+                    });
+
                     // Restore active file if panel was just toggled on
                     if (activeFile) {
                         const tab = tabs.find(t => t.path === activeFile);
@@ -1727,7 +2015,9 @@ const App = () => {
 
     const loadFiles = async (path, customExpandedPaths = null) => {
         try {
-            const exp = customExpandedPaths || expandedFolders;
+            // CRITICAL: Always use current expandedFolders state to preserve expansion
+            // Only use customExpandedPaths when explicitly provided (e.g., during rename)
+            const exp = customExpandedPaths !== null ? customExpandedPaths : expandedFolders;
 
             const fetchDirRecursive = async (dirPath) => {
                 const results = await window.api.readDir(dirPath);
@@ -1745,7 +2035,7 @@ const App = () => {
             };
 
             const rootChildren = await fetchDirRecursive(path);
-            const rootName = path.split(/[\\/]/).filter(Boolean).pop() || 'Project';
+            const rootName = path.split(/[\\\/]/).filter(Boolean).pop() || 'Project';
 
             setFiles([{
                 name: rootName,
@@ -1754,11 +2044,14 @@ const App = () => {
                 children: rootChildren
             }]);
 
-            setExpandedFolders(prev => {
-                const next = new Set(prev);
-                next.add(path);
-                return next;
-            });
+            // Only add root path if not using custom expanded paths
+            if (customExpandedPaths === null) {
+                setExpandedFolders(prev => {
+                    const next = new Set(prev);
+                    next.add(path);
+                    return next;
+                });
+            }
         } catch (err) {
             console.error(err);
         }
@@ -1785,7 +2078,21 @@ const App = () => {
                 openFile({ path: fullPath, name, isDirectory: false });
             } else {
                 await window.api.createFolder(fullPath);
+                // Auto-expand the newly created folder
+                setExpandedFolders(prev => {
+                    const next = new Set(prev);
+                    next.add(fullPath);
+                    return next;
+                });
             }
+
+            // Ensure parent folder is expanded
+            setExpandedFolders(prev => {
+                const next = new Set(prev);
+                next.add(parentPath);
+                return next;
+            });
+
             addLog(null, `Created ${type}: ${name}`);
             loadFiles(workspaceRef.current);
         } catch (err) {
@@ -1862,30 +2169,46 @@ const App = () => {
     const toggleFolder = async (folder) => {
         const path = folder.path;
         const newExpanded = new Set(expandedFolders);
+
         if (newExpanded.has(path)) {
             newExpanded.delete(path);
+            setExpandedFolders(newExpanded);
+            return; // Collapsing - just update state and return
         } else {
             newExpanded.add(path);
-            // Pre-load subfiles to nested state if needed? 
-            // For now, let's just use a simple recursive render or flat list with expansion.
-            // A more robust way is to store children in the file object itself.
+            setExpandedFolders(newExpanded);
         }
-        setExpandedFolders(newExpanded);
 
-        // If expanding, make sure we have the children loaded in a nested structure or flat with parent tracking.
-        // Let's modify loadFiles to be recursive or fetch on demand.
-        if (folder.isDirectory && !folder.children) {
-            try {
-                const children = await window.api.readDir(path);
-                const sortedChildren = children.sort((a, b) => {
-                    if (a.isDirectory === b.isDirectory) return a.name.localeCompare(b.name);
-                    return a.isDirectory ? -1 : 1;
+        // If children already loaded, we're done (just needed to update expanded state above)
+        if (folder.children) {
+            return;
+        }
+
+        // Need to load children - do it immutably
+        try {
+            const children = await window.api.readDir(path);
+            const sortedChildren = children.sort((a, b) => {
+                if (a.isDirectory === b.isDirectory) return a.name.localeCompare(b.name);
+                return a.isDirectory ? -1 : 1;
+            });
+
+            // Immutably update the file tree
+            const updateFolderChildren = (items) => {
+                return items.map(item => {
+                    if (item.path === path) {
+                        // Found the folder - return new object with children
+                        return { ...item, children: sortedChildren };
+                    } else if (item.children && item.isDirectory) {
+                        // Recursively search in children
+                        return { ...item, children: updateFolderChildren(item.children) };
+                    }
+                    return item;
                 });
-                folder.children = sortedChildren;
-                setFiles([...files]); // Trigger re-render
-            } catch (err) {
-                console.error(err);
-            }
+            };
+
+            setFiles(updateFolderChildren(files));
+        } catch (err) {
+            console.error('Error loading folder children:', err);
         }
     };
 
@@ -1896,6 +2219,22 @@ const App = () => {
             setTerminals(prev => prev.map(t => ({ ...t, cwd: path, cwdInput: path })));
             loadFiles(path);
         }
+    };
+
+    // Handle project creation from wizard
+    const handleCreateProject = (framework, projectName) => {
+        // Store the getting started info
+        setGettingStartedTab({ framework, projectName });
+
+        // Open the central panel with editor + terminal visible
+        setIsCentralPanelVisible(true);
+        setIsTerminalVisible(true);
+        setIsRightPanelVisible(false); // Chat hidden by default
+
+        // Close any other tabs and set active to getting-started pseudo-tab
+        setActiveFile('__getting-started__');
+
+        addLog(null, `🚀 Starting new ${framework.name} project: ${projectName}`, 'info');
     };
 
     const addLog = (terminalId, msg, type = 'info') => {
@@ -1961,16 +2300,200 @@ const App = () => {
                 refreshLayout();
                 setTimeout(refreshLayout, 50);
                 setTimeout(refreshLayout, 250);
-
-                // Add save shortcut
-                monacoRef.current.addCommand(window.monaco.KeyMod.CtrlCmd | window.monaco.KeyCode.KeyS, () => {
-                    saveFile(file.path);
-                });
             }
+
+            // FILE-SCOPED CHAT: Create or activate chat for this file
+            // Check if a file-scoped chat already exists for this file in the chats array
+            const existingFileChat = chats.find(c => c.isFileScoped && c.filePath === file.path);
+
+            if (!existingFileChat) {
+                // Create new file-scoped chat
+                const newFileChatId = 'file-' + Date.now();
+                const newFileChat = {
+                    id: newFileChatId,
+                    filePath: file.path,
+                    fileName: file.name,
+                    title: `💬 ${file.name}`,
+                    messages: [],
+                    agentSessions: [],
+                    createdAt: Date.now(),
+                    lastUpdatedAt: Date.now(),
+                    aiStatus: null,
+                    isPlanning: false,
+                    isAgentExecuting: false,
+                    isFileScoped: true // Mark as file-scoped
+                };
+
+                // Update fileChats mapping for quick lookup
+                setFileChats(prev => ({ ...prev, [file.path]: newFileChat }));
+
+                // Add to main chats array for rendering
+                setChats(prev => [...prev, newFileChat]);
+                setOpenChatIds(prev => [...prev, newFileChatId]);
+                setActiveChatId(newFileChatId);
+            } else {
+                // Activate existing file chat
+                if (!openChatIds.includes(existingFileChat.id)) {
+                    setOpenChatIds(prev => [...prev, existingFileChat.id]);
+                }
+                setActiveChatId(existingFileChat.id);
+
+                // Update fileChats mapping to keep it in sync
+                setFileChats(prev => ({ ...prev, [file.path]: existingFileChat }));
+            }
+
+            // Show chat panel when file is opened
+            setIsRightPanelVisible(true);
+            setActiveFileChatPath(file.path);
+
         } catch (err) {
             addLog(null, `Error opening file: ${err.message}`, 'error');
         }
     };
+
+    // Session Persistence
+    const canAutoSave = useRef(false); // Default to FALSE to prevent overwriting initial state
+    const hasRestoredSession = useRef(false);
+
+    useEffect(() => {
+        if (!workspace || hasRestoredSession.current) return;
+
+        const restoreSession = async () => {
+            console.log('Starting session restoration check...');
+            try {
+                const editorState = await window.api.getEditorState();
+
+                if (editorState) {
+                    const { openFilePaths, activeFilePath, expandedFolderPaths, fullTabs } = editorState;
+                    console.log('Found session data:', { files: openFilePaths?.length, folders: expandedFolderPaths?.length });
+
+                    // Restore expanded folders AND trigger file reload to populate tree
+                    if (expandedFolderPaths && Array.isArray(expandedFolderPaths)) {
+                        const newExpandedSet = new Set(expandedFolderPaths);
+                        setExpandedFolders(newExpandedSet);
+                        // Force reload of files with new expanded paths so children are fetched
+                        await loadFiles(workspace, newExpandedSet);
+                    }
+
+                    // Restore Tabs with Dirty State
+                    if (fullTabs && Array.isArray(fullTabs)) {
+                        for (const tabData of fullTabs) {
+                            // File object structure
+                            const fileObj = {
+                                path: tabData.path,
+                                name: tabData.name,
+                                isDirectory: false
+                            };
+
+                            // 1. Open the file (loads disk content)
+                            await openFile(fileObj);
+
+                            // 2. If it was dirty, apply the changes on top to enable Undo
+                            if (tabData.isDirty && tabData.content) {
+                                // We need to wait a tick for Monaco to initialize the model with disk content
+                                await new Promise(r => setTimeout(r, 100));
+
+                                const uri = window.monaco.Uri.file(tabData.path);
+                                const model = window.monaco.editor.getModel(uri);
+
+                                if (model) {
+                                    const currentDiskContent = model.getValue();
+
+                                    // Make sure we actually have a diff
+                                    if (currentDiskContent !== tabData.content) {
+                                        // Use pushEditOperations to enable Undo
+                                        const fullRange = model.getFullModelRange();
+                                        model.pushEditOperations(
+                                            [],
+                                            [{
+                                                range: fullRange,
+                                                text: tabData.content
+                                            }],
+                                            () => null
+                                        );
+
+                                        // Mark as dirty in UI
+                                        setTabs(prev => prev.map(t =>
+                                            t.path === tabData.path ? { ...t, isDirty: true } : t
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+
+                        if (activeFilePath) {
+                            setActiveFile(activeFilePath);
+                        }
+                    } else if (openFilePaths && Array.isArray(openFilePaths)) {
+                        // Legacy Fallback
+                        for (const filePath of openFilePaths) {
+                            const name = filePath.replace(/\\/g, '/').split('/').pop();
+                            await openFile({ path: filePath, name, isDirectory: false });
+                        }
+                        if (activeFilePath) setActiveFile(activeFilePath);
+                    }
+                } else {
+                    // Try legacy localStorage if no file-store data
+                    const legacyData = localStorage.getItem('anita_session_v1');
+                    if (legacyData) {
+                        const { openFilePaths, activeFilePath, expandedFolderPaths } = JSON.parse(legacyData);
+                        if (expandedFolderPaths) {
+                            const newExpandedSet = new Set(expandedFolderPaths);
+                            setExpandedFolders(newExpandedSet);
+                            await loadFiles(workspace, newExpandedSet);
+                        }
+                        if (openFilePaths) {
+                            for (const filePath of openFilePaths) {
+                                const name = filePath.replace(/\\/g, '/').split('/').pop();
+                                await openFile({ path: filePath, name, isDirectory: false });
+                            }
+                            if (activeFilePath) setActiveFile(activeFilePath);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error("Session restore failed", e);
+            } finally {
+                // Enable saving ONLY after we have finished attempting to restore
+                // Use a small buffer to strictly ensure the state updates have settled
+                setTimeout(() => {
+                    canAutoSave.current = true;
+                    hasRestoredSession.current = true;
+                    console.log('Session restoration finished. Auto-save is now ENABLED.');
+                }, 1000);
+            }
+        };
+
+        // Delay slightly to ensure editor/environment is ready
+        setTimeout(restoreSession, 500);
+    }, [workspace]);
+
+    useEffect(() => {
+        // STRICTLY BLOCK saving until restoration is complete
+        if (!canAutoSave.current) {
+            // console.log('Auto-save blocked: restoration pending');
+            return;
+        }
+
+        // Debounce saving slightly or just save on change
+        const session = {
+            openFilePaths: tabs.map(t => t.path),
+            activeFilePath: activeFile,
+            expandedFolderPaths: Array.from(expandedFolders),
+            // Persist full tab state including dirty content
+            fullTabs: tabs.map(t => ({
+                path: t.path,
+                name: t.name,
+                isDirty: t.isDirty,
+                content: t.isDirty ? t.content : null // Only save content if dirty
+            }))
+        };
+
+        // Use backend storage instead of localStorage
+        window.api.saveEditorState(session).catch(e => console.error(e));
+        // Legacy fallback cleanup
+        localStorage.removeItem('anita_session_v1');
+    }, [tabs, activeFile, expandedFolders]);
 
     const saveFile = async (path) => {
         const tab = tabs.find(t => t.path === path);
@@ -1988,6 +2511,68 @@ const App = () => {
             addLog(null, `Error saving file: ${err.message}`, 'error');
         }
     };
+
+    const startDevServer = async () => {
+        setIsDevServerRunning(true);
+        // Ensure terminal is visible
+        if (!isTerminalVisible) setIsTerminalVisible(true);
+
+        // helper to find project root
+        let projectRoot = workspace || '';
+        if (activeFile) {
+            try {
+                // Simple path manipulation to walk up
+                // Assuming Windows paths mostly based on user context, but handling both separators is safer
+                let currentDir = activeFile.substring(0, Math.max(activeFile.lastIndexOf('/'), activeFile.lastIndexOf('\\')));
+
+                // Guard against infinite loops or going up too far (stop at workspace or simple depth limit)
+                let attempts = 0;
+                while (currentDir && currentDir.length > (workspace?.length || 0) && attempts < 10) {
+                    const pkgPath = currentDir + (currentDir.includes('/') ? '/' : '\\') + 'package.json';
+                    const exists = await window.api.pathExists(pkgPath);
+                    if (exists) {
+                        projectRoot = currentDir;
+                        addLog(null, `Detected project root at: ${projectRoot}`, 'info');
+                        break;
+                    }
+                    // Move up
+                    const lastSep = Math.max(currentDir.lastIndexOf('/'), currentDir.lastIndexOf('\\'));
+                    if (lastSep === -1) break;
+                    currentDir = currentDir.substring(0, lastSep);
+                    attempts++;
+                }
+            } catch (e) {
+                console.warn('Failed to detect project root:', e);
+            }
+        }
+
+        // Manual addTerminal logic to capture ID robustly
+        const newId = 't-' + Date.now();
+        const newTerminal = {
+            id: newId,
+            logs: [],
+            input: '',
+            history: [],
+            historyIndex: -1,
+            cwd: projectRoot, // Use detected root
+            cwdInput: projectRoot
+        };
+
+        setTerminals(prev => [...prev, newTerminal]);
+        setActiveTerminalId(newId);
+
+        // CRITICAL: Sync CWD with backend process so runCommand uses the correct dir
+        await window.api.setTerminalCwd(newId, projectRoot);
+
+        // Wait slightly for UI to settle then send command
+        setTimeout(async () => {
+            // Send directly to the known ID
+            await window.api.sendTerminalInput(newId, 'npm start');
+        }, 500);
+    };
+
+    // Update saveFileRef
+    useEffect(() => { saveFileRef.current = saveFile; }, [saveFile]);
 
     const closeFile = async (e, path) => {
         if (e) e.stopPropagation();
@@ -2036,6 +2621,163 @@ const App = () => {
         }
 
         finalizeClose();
+    };
+
+    // Helper: Find file in workspace by name
+    const findFileInWorkspace = async (fileName, workspace) => {
+        const searchInDir = async (dir) => {
+            try {
+                const items = await window.api.readDir(dir);
+                for (const item of items) {
+                    // Skip node_modules and other common ignore directories
+                    if (item.name === 'node_modules' || item.name === '.git' || item.name === 'dist' || item.name === 'build') {
+                        continue;
+                    }
+
+                    if (!item.isDirectory && item.name === fileName) {
+                        return item.path;
+                    } else if (item.isDirectory) {
+                        const found = await searchInDir(item.path);
+                        if (found) return found;
+                    }
+                }
+            } catch (e) {
+                // Ignore permission errors
+            }
+            return null;
+        };
+        return await searchInDir(workspace);
+    };
+
+    // NEW: Agent handler using function calling
+    const handleStartAgentWithFunctionCalling = async (goal) => {
+        if (!workspace) {
+            addLog(null, "Please select a workspace first.", "error");
+            return;
+        }
+        if (!agentManagerRef.current) {
+            addLog(null, "Agent not initialized. Please check your API key.", "error");
+            return;
+        }
+
+        const targetChatId = activeChatId;
+
+        // Extract @-mentioned files from goal
+        const mentionRegex = /@([\w.-]+)/g;
+        const mentions = goal.match(mentionRegex) || [];
+
+        let enhancedGoal = goal;
+
+        // Read content of mentioned files
+        if (mentions.length > 0) {
+            addLog(null, `📎 Found ${mentions.length} file reference(s): ${mentions.join(', ')}`);
+
+            const mentionedFileContents = await Promise.all(
+                mentions.map(async (mention) => {
+                    const fileName = mention.replace('@', '');
+
+                    // Search for file in workspace
+                    const filePath = await findFileInWorkspace(fileName, workspace);
+
+                    if (filePath) {
+                        try {
+                            const content = await window.api.readFile(filePath);
+                            addLog(null, `✅ Loaded context from ${fileName}`);
+                            return { fileName, filePath, content };
+                        } catch (e) {
+                            addLog(null, `⚠️ Could not read ${fileName}: ${e.message}`);
+                            return { fileName, error: e.message };
+                        }
+                    } else {
+                        addLog(null, `⚠️ File not found: ${fileName}`);
+                        return { fileName, error: 'File not found' };
+                    }
+                })
+            );
+
+            // Enhance goal with file contexts
+            if (mentionedFileContents.some(f => f.content)) {
+                enhancedGoal += '\n\n**Referenced Files:**\n';
+                mentionedFileContents.forEach(({ fileName, content, error }) => {
+                    if (content) {
+                        const ext = fileName.split('.').pop();
+                        enhancedGoal += `\n### @${fileName}\n\`\`\`${ext}\n${content}\n\`\`\`\n`;
+                    } else {
+                        enhancedGoal += `\n### @${fileName}\n(Error: ${error})\n`;
+                    }
+                });
+            }
+        }
+
+        addLog(null, `🚀 Starting agent with function calling: ${goal}`);
+
+        // Create agent session with enhanced goal and active file
+        const sessionId = await agentManagerRef.current.startSession(
+            enhancedGoal,
+            targetChatId,
+            workspace,
+            activeFile  // Pass active file for file-scoped context
+        );
+
+        // Add session to chat
+        setChats(prev => prev.map(c => {
+            if (c.id === targetChatId) {
+                return {
+                    ...c,
+                    agentSessions: [...(c.agentSessions || []), {
+                        id: sessionId,
+                        goal: goal,
+                        status: 'running',
+                        logs: [],
+                        createdAt: Date.now()
+                    }],
+                    isAgentExecuting: true
+                };
+            }
+            return c;
+        }));
+    };
+
+    // @-Mention Handlers
+    const handleMentionSelect = (file) => {
+        if (!mentionQuery) return;
+
+        const { startIndex } = mentionQuery;
+        // Don't use substring as it might be outdated if user typed more
+        // Re-construct based on start index and current cursor
+        const beforeMention = composerInput.substring(0, startIndex);
+
+        // Find where the mention part ends (space or end of string)
+        const afterStartIndex = composerInput.substring(startIndex);
+        const match = afterStartIndex.match(/^@[\w.-]*/);
+        const matchLength = match ? match[0].length : 0;
+
+        const afterMention = composerInput.substring(startIndex + matchLength);
+
+        // Insert @filename
+        const newValue = beforeMention + `@${file.name} ` + afterMention;
+        setComposerInput(newValue);
+
+        // Close dropdown
+        setMentionQuery(null);
+        setMentionDropdownPosition(null);
+        setSelectedMentionIndex(0);
+
+        // Refocus input
+        if (composerRef.current) {
+            composerRef.current.focus();
+            // Set cursor after the inserted mention
+            const newCursorPos = (beforeMention + `@${file.name} `).length;
+            setTimeout(() => {
+                composerRef.current.setSelectionRange(newCursorPos, newCursorPos);
+            }, 0);
+        }
+    };
+
+    const handleMentionClose = () => {
+        setMentionQuery(null);
+        setMentionDropdownPosition(null);
+        setSelectedMentionIndex(0);
     };
 
 
@@ -2282,10 +3024,10 @@ const App = () => {
             let intentMode = AGENT_MODES.CHAT;
 
             if (composerMode === 'agent') {
-                intentMode = detectAgentIntent(goal, currentActiveChat ? currentActiveChat.messages : []);
+                intentMode = detectAgentIntent(goal, currentActiveChat ? currentActiveChat.messages : [], composerMode);
             } else {
                 // Auto-upgrade to Agent Mode if intent is high even in Chat
-                const detected = detectAgentIntent(goal, currentActiveChat ? currentActiveChat.messages : []);
+                const detected = detectAgentIntent(goal, currentActiveChat ? currentActiveChat.messages : [], 'chat');
                 if (detected === AGENT_MODES.CLARIFY || detected === AGENT_MODES.HANDOFF || detected === AGENT_MODES.PLAN) {
                     intentMode = detected;
                     setComposerMode('agent'); // Force UI to reflect the switch
@@ -2297,9 +3039,9 @@ const App = () => {
 
             if (intentMode !== AGENT_MODES.CHAT) {
                 if (intentMode === AGENT_MODES.AUTONOMOUS) {
-                    addLog(null, "Starting Autonomous Agent Loop...");
-                    // Start the autonomous loop immediately
-                    runAutonomousLoop(targetChatId, goal);
+                    addLog(null, "Starting Agent with Function Calling...");
+                    // Use new function calling agent
+                    await handleStartAgentWithFunctionCalling(goal);
                     return;
                 }
 
@@ -2321,8 +3063,36 @@ WINDOWS GUIDELINES:
                 .filter(m => m.content)
                 .map(m => ({ role: m.role, content: m.content }));
 
+            // AUTO-INJECT FILE CONTEXT (GitHub Copilot-style)
+            // If a file is currently open, automatically include its context
+            let fileContextMessage = null;
+            if (activeFile) {
+                const activeTab = tabs.find(t => t.path === activeFile);
+                if (activeTab) {
+                    const fileName = activeTab.name || activeFile.split(/[/\\]/).pop();
+                    const language = getLanguageForFile(fileName);
+                    const fileContent = activeTab.content || '';
+
+                    fileContextMessage = {
+                        role: 'system',
+                        content: `# Active File Context
+
+**File:** \`${activeFile}\`
+**Language:** ${language}
+
+\`\`\`${language}
+${fileContent}
+\`\`\`
+
+The user is currently working on this file. Use this context to provide relevant assistance.`
+                    };
+                }
+            }
+
             // Add the system instruction for this specific call
-            const finalMessages = [{ role: 'system', content: systemInstruction }, ...messagesForAI];
+            const finalMessages = fileContextMessage
+                ? [{ role: 'system', content: systemInstruction }, fileContextMessage, ...messagesForAI]
+                : [{ role: 'system', content: systemInstruction }, ...messagesForAI];
 
             if (intentMode === AGENT_MODES.PLAN) {
                 finalMessages.push({
@@ -2595,13 +3365,23 @@ WINDOWS GUIDELINES:
             } else {
                 console.error(err);
                 addLog(null, `Error: ${err.message}`, "error");
+
+                // Display error message in chat for better visibility
+                const errorMsg = {
+                    id: 'error-' + Date.now(),
+                    role: 'assistant',
+                    content: `❌ **Error**: ${err.message}\n\n${err.message.includes('API key') ? '💡 **Tip**: Click the Settings icon (⚙️) in the top-right corner to configure your API key.' : ''}`,
+                    timestamp: new Date().toLocaleTimeString(),
+                    isError: true
+                };
+
+                setChats(prev => prev.map(c => c.id === targetChatId ? {
+                    ...c,
+                    isPlanning: false,
+                    aiStatus: null,
+                    messages: [...c.messages.filter(m => !m.isLoading), errorMsg]
+                } : c));
             }
-            setChats(prev => prev.map(c => c.id === targetChatId ? {
-                ...c,
-                isPlanning: false,
-                aiStatus: null,
-                messages: c.messages.filter(m => !m.isLoading)
-            } : c));
         } finally {
             if (abortControllersRef.current[targetChatId] === currentController) {
                 delete abortControllersRef.current[targetChatId];
@@ -3189,7 +3969,14 @@ Respond ONLY with JSON:
                         </div>
 
                         {explorerMenuOpen && (
-                            <div className="file-ops-dropdown glass" style={{ top: '30px', right: '8px', minWidth: '160px' }} onMouseLeave={() => setExplorerMenuOpen(false)}>
+                            <div className="file-ops-dropdown glass" style={{ top: '30px', right: '8px', minWidth: '180px' }} onMouseLeave={() => setExplorerMenuOpen(false)}>
+                                <div className="file-ops-item" onClick={() => {
+                                    setShowProjectWizard(true);
+                                    setExplorerMenuOpen(false);
+                                }} style={{ borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: 8, marginBottom: 4 }}>
+                                    <Icon name="sparkles" size={14} style={{ color: '#a78bfa' }} />
+                                    <span style={{ color: '#a78bfa', fontWeight: 500 }}>Create New Project</span>
+                                </div>
                                 <div className="file-ops-item" onClick={() => {
                                     handleSelectWorkspace();
                                     setExplorerMenuOpen(false);
@@ -3234,8 +4021,28 @@ Respond ONLY with JSON:
                 {isCentralPanelVisible && (
                     <main className="main-content">
                         <div className="editor-area">
-                            {tabs.length > 0 && (
+                            {(tabs.length > 0 || gettingStartedTab) && (
                                 <div className="editor-tabs">
+                                    {/* Getting Started Tab */}
+                                    {gettingStartedTab && (
+                                        <div
+                                            className={`editor-tab ${activeFile === '__getting-started__' ? 'active' : ''}`}
+                                            onClick={() => setActiveFile('__getting-started__')}
+                                        >
+                                            <Icon name="sparkles" size={14} style={{ color: '#a78bfa' }} className="tab-icon" />
+                                            <span className="tab-name-text">Get Started: {gettingStartedTab.projectName}</span>
+                                            <button className="tab-close" onClick={(e) => {
+                                                e.stopPropagation();
+                                                setGettingStartedTab(null);
+                                                if (activeFile === '__getting-started__') {
+                                                    setActiveFile(tabs.length > 0 ? tabs[0].path : null);
+                                                }
+                                            }}>
+                                                <Icon name={X} size={12} />
+                                            </button>
+                                        </div>
+                                    )}
+                                    {/* Regular File Tabs */}
                                     {tabs.map(tab => {
                                         const icon = getFileIcon(tab.name);
                                         return (
@@ -3243,10 +4050,47 @@ Respond ONLY with JSON:
                                                 key={tab.path}
                                                 className={`editor-tab ${activeFile === tab.path ? 'active' : ''}`}
                                                 onClick={() => openFile(tab)}
+                                                onMouseEnter={() => setHoveredTab(tab.path)}
+                                                onMouseLeave={() => setHoveredTab(null)}
+                                                style={{ position: 'relative', paddingRight: 55 }} // Make room for icons
                                             >
                                                 <Icon name={icon.name} size={14} style={{ color: icon.color }} className="tab-icon" />
                                                 <span className="tab-name-text">{tab.name}</span>
-                                                {tab.isDirty && <div className="dirty-dot" />}
+
+                                                {/* Dirty indicator - only show if NOT hovering or not in preview/hover interaction state */}
+                                                {tab.isDirty && !hoveredTab && previewFile !== tab.path && <div className="dirty-dot" />}
+
+                                                {/* Action Icons (Eye/Code) */}
+                                                {(hoveredTab === tab.path || previewFile === tab.path) && (
+                                                    <button
+                                                        className="tab-action-btn"
+                                                        style={{
+                                                            position: 'absolute',
+                                                            right: 32, // Left of close button with margin
+                                                            top: '50%',
+                                                            transform: 'translateY(-50%)',
+                                                            background: 'none',
+                                                            border: 'none',
+                                                            cursor: 'pointer',
+                                                            padding: 2,
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            color: 'var(--text-secondary)'
+                                                        }}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            if (previewFile === tab.path) {
+                                                                setPreviewFile(null); // Switch back to code
+                                                            } else {
+                                                                setPreviewFile(tab.path); // Switch to preview
+                                                            }
+                                                        }}
+                                                        title={previewFile === tab.path ? "Back to Code" : "Live Preview"}
+                                                    >
+                                                        <Icon name={previewFile === tab.path ? CodeIcon : Eye} size={13} />
+                                                    </button>
+                                                )}
+
                                                 <button className="tab-close" onClick={(e) => closeFile(e, tab.path)}>
                                                     <Icon name={X} size={12} />
                                                 </button>
@@ -3259,14 +4103,117 @@ Respond ONLY with JSON:
                             <Breadcrumbs activeFile={activeFile} workspace={workspace} />
 
                             <div className="editor-main-wrapper">
+                                {/* Preview Container */}
+
+                                <div className="preview-container" style={{ height: '100%', width: '100%', background: 'white', display: (activeFile && activeFile === previewFile && activeFile !== '__getting-started__') ? 'flex' : 'none', flexDirection: 'column' }}>
+                                    {(activeFile && activeFile === previewFile && activeFile !== '__getting-started__') && (() => {
+                                        const tab = tabs.find(t => t.path === activeFile);
+                                        const ext = activeFile.split('.').pop().toLowerCase();
+
+                                        if (['html', 'htm'].includes(ext)) {
+                                            // For HTML, use an iframe with srcDoc
+                                            // Ideally we'd resolve relative links but for now basic srcDoc
+                                            // Note: We need a way to get the content update if it's dirty? 
+                                            // The prompt implies seeing the file. We can use tab.content if dirty, or load from disk.
+                                            // Since we have tab.content in state, let's use that.
+                                            return (
+                                                <iframe
+                                                    srcDoc={tab?.content || ''}
+                                                    style={{ width: '100%', height: '100%', border: 'none' }}
+                                                    title="Live Preview"
+                                                    sandbox="allow-scripts" // Basic security
+                                                />
+                                            );
+                                        } else if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) {
+                                            return (
+                                                <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#1e1e1e' }}>
+                                                    <img src={`file://${activeFile}`} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} alt="Preview" />
+                                                </div>
+                                            );
+                                        } else {
+                                            // Check if it's a web-app file (JS/TS/CSS)
+                                            if (['js', 'jsx', 'ts', 'tsx', 'css', 'json'].includes(ext)) {
+                                                if (devServerUrl) {
+                                                    return (
+                                                        <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+                                                            <div style={{ padding: '4px 8px', background: '#eee', borderBottom: '1px solid #ccc', fontSize: '12px', display: 'flex', justifyContent: 'space-between', color: '#333' }}>
+                                                                <span>Previewing: {devServerUrl}</span>
+                                                                <button onClick={() => setDevServerUrl(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'red' }}>Reset</button>
+                                                            </div>
+                                                            <iframe
+                                                                src={devServerUrl}
+                                                                style={{ width: '100%', flex: 1, border: 'none' }}
+                                                                title="App Preview"
+                                                            />
+                                                        </div>
+                                                    );
+                                                } else {
+                                                    return (
+                                                        <div style={{ padding: 40, color: '#333', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+                                                            <Icon name={Monitor} size={48} style={{ marginBottom: 20, opacity: 0.2 }} />
+                                                            <h3>Web App Preview</h3>
+                                                            <p style={{ maxWidth: 300, marginBottom: 20, opacity: 0.7 }}>
+                                                                To preview this file live, we need to run your development server (e.g., localhost:3000).
+                                                            </p>
+                                                            <button
+                                                                className="btn btn-primary"
+                                                                onClick={startDevServer}
+                                                                disabled={isDevServerRunning}
+                                                            >
+                                                                {isDevServerRunning ? 'Starting Server...' : 'Start Dev Server (npm start)'}
+                                                            </button>
+
+                                                            {isDevServerRunning && (
+                                                                <p style={{ fontSize: 12, marginTop: 10, opacity: 0.6 }}>
+                                                                    Check the terminal for output. Waiting for localhost URL...
+                                                                </p>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                }
+                                            }
+
+                                            return (
+                                                <div style={{ padding: 20, color: '#333', textAlign: 'center' }}>
+                                                    <h3>Preview not available</h3>
+                                                    <p>This file type ({ext}) cannot be previewed in this mode.</p>
+                                                    <button
+                                                        className="btn btn-primary"
+                                                        style={{ marginTop: 10 }}
+                                                        onClick={() => setPreviewFile(null)}
+                                                    >
+                                                        Back to Code
+                                                    </button>
+                                                </div>
+                                            );
+                                        }
+                                    })()}
+                                </div>
+
+                                {/* Monaco Editor - hidden when getting started tab is active OR preview is active */}
                                 <div
                                     id="monaco-editor-instance"
                                     ref={editorContainerRef}
                                     className="monaco-container-node"
-                                    style={{ visibility: activeFile ? 'visible' : 'hidden' }}
+                                    style={{
+                                        visibility: (activeFile && activeFile !== '__getting-started__' && activeFile !== previewFile) ? 'visible' : 'hidden',
+                                        display: (activeFile === '__getting-started__' || activeFile === previewFile) ? 'none' : 'block'
+                                    }}
                                 ></div>
 
-                                {!activeFile && (
+                                {/* Getting Started Tab */}
+                                {activeFile === '__getting-started__' && gettingStartedTab && (
+                                    <div style={{ height: '100%', overflow: 'auto', background: 'var(--bg-primary)' }}>
+                                        <GettingStartedTab
+                                            framework={gettingStartedTab.framework}
+                                            projectName={gettingStartedTab.projectName}
+                                            onCopyCommand={(cmd) => addLog(null, `Copied: ${cmd}`, 'info')}
+                                        />
+                                    </div>
+                                )}
+
+                                {/* Empty State */}
+                                {!activeFile && !gettingStartedTab && (
                                     <div className="empty-state">
                                         <Icon name={CodeIcon} size={64} style={{ opacity: 0.05 }} />
                                         <p>Select a file to begin editing</p>
@@ -3405,35 +4352,50 @@ Respond ONLY with JSON:
                                 }} />
                             )}
                             <div className="chat-sessions-bar">
-                                <button
-                                    className={`add-chat-btn ${isHistorySidebarVisible ? 'active' : ''}`}
-                                    onClick={() => setIsHistorySidebarVisible(!isHistorySidebarVisible)}
-                                    title="Chat History"
-                                    style={{ marginRight: 4 }}
-                                >
-                                    <Icon name={History} size={14} />
-                                </button>
                                 <div className="sessions-list scrollable-x">
-                                    {openChatIds.map(id => {
-                                        const chat = chats.find(c => c.id === id);
-                                        if (!chat) return null;
+                                    {(() => {
+                                        // Only show the active chat if it's file-scoped
+                                        const activeChat = chats.find(c => c.id === activeChatId);
+                                        if (!activeChat || !activeChat.isFileScoped) return null;
+
+                                        // Get file icon
+                                        const fileIcon = activeChat.fileName
+                                            ? getFileIcon(activeChat.fileName)
+                                            : null;
+
                                         return (
                                             <div
-                                                key={chat.id}
-                                                className={`chat-tab ${activeChatId === chat.id ? 'active' : ''}`}
-                                                onClick={() => setActiveChatId(chat.id)}
+                                                key={activeChat.id}
+                                                className="chat-tab active file-scoped"
                                             >
-                                                <span className="tab-title">{chat.title}</span>
-                                                <button className="close-tab" onClick={(e) => closeChatTab(chat.id, e)}>
-                                                    <Icon name={X} size={10} />
-                                                </button>
+                                                {fileIcon && (
+                                                    <Icon name={fileIcon.name} size={12} style={{ color: fileIcon.color, marginRight: 4 }} />
+                                                )}
+                                                <span className="tab-title">{activeChat.fileName}</span>
                                             </div>
                                         );
-                                    })}
+                                    })()}
                                 </div>
-                                <button className="add-chat-btn" onClick={createNewChat} title="New Chat">
-                                    <Icon name={Plus} size={14} />
-                                </button>
+                                {/* Clear Chat Button */}
+                                {(() => {
+                                    const activeChat = chats.find(c => c.id === activeChatId);
+                                    if (!activeChat || activeChat.messages.length === 0) return null;
+
+                                    return (
+                                        <button
+                                            className="add-chat-btn"
+                                            onClick={() => {
+                                                if (window.confirm('Are you sure you want to clear this chat? This will delete all messages and cannot be undone.')) {
+                                                    clearChat(activeChatId);
+                                                }
+                                            }}
+                                            title="Clear Chat"
+                                            style={{ marginLeft: 'auto' }}
+                                        >
+                                            <Icon name={Trash2} size={12} />
+                                        </button>
+                                    );
+                                })()}
                             </div>
 
                             {/* Off-canvas History Sidebar */}
@@ -3516,10 +4478,44 @@ Respond ONLY with JSON:
                                     textAlign: 'center',
                                     color: 'var(--text-secondary)'
                                 }}>
-                                    <h2 style={{ fontFamily: 'Outfit', fontSize: 24, marginBottom: 12, color: settings.startupHelloColor || 'var(--text-primary)' }}>Hello!</h2>
-                                    <p style={{ fontSize: 14, lineHeight: 1.6, maxWidth: '500px', color: settings.startupMsgColor || 'var(--text-secondary)' }}>
-                                        I'm your A.N.I.T.A (Advanced Neuro-Intelligent Task Assistant).<br /> Tell me what you'd like to build and I'll help you achieve it in a jiffy😉.
-                                    </p>
+                                    {activeChat?.isFileScoped ? (
+                                        // File-scoped chat welcome message
+                                        <>
+                                            {(() => {
+                                                const fileIcon = getFileIcon(activeChat.fileName);
+                                                return (
+                                                    <div style={{
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        gap: 12,
+                                                        marginBottom: 16,
+                                                        padding: '12px 24px',
+                                                        background: 'rgba(167, 139, 250, 0.1)',
+                                                        borderRadius: 12,
+                                                        border: '1px solid rgba(167, 139, 250, 0.2)'
+                                                    }}>
+                                                        <Icon name={fileIcon.name} size={32} style={{ color: fileIcon.color }} />
+                                                        <span style={{ fontSize: 18, fontWeight: 600, color: '#fff' }}>{activeChat.fileName}</span>
+                                                    </div>
+                                                );
+                                            })()}
+                                            <h2 style={{ fontFamily: 'Outfit', fontSize: 20, marginBottom: 12, color: '#a78bfa' }}>
+                                                What would you like to do with this file?
+                                            </h2>
+                                            <p style={{ fontSize: 14, lineHeight: 1.6, maxWidth: '450px', color: 'var(--text-secondary)' }}>
+                                                Describe the changes you want in natural language.<br />
+                                                I'll edit <strong style={{ color: '#fff' }}>{activeChat.fileName}</strong> exactly how you need it.
+                                            </p>
+                                        </>
+                                    ) : (
+                                        // Regular chat welcome message
+                                        <>
+                                            <h2 style={{ fontFamily: 'Outfit', fontSize: 24, marginBottom: 12, color: settings.startupHelloColor || 'var(--text-primary)' }}>Hello!</h2>
+                                            <p style={{ fontSize: 14, lineHeight: 1.6, maxWidth: '500px', color: settings.startupMsgColor || 'var(--text-secondary)' }}>
+                                                I'm your A.N.I.T.A (Advanced Neuro-Intelligent Task Assistant).<br /> Tell me what you'd like to build and I'll help you achieve it in a jiffy😉.
+                                            </p>
+                                        </>
+                                    )}
                                 </div>
                             ) : (
                                 <div className="messages-list">
@@ -3741,6 +4737,17 @@ Respond ONLY with JSON:
                     <div className="composer-area">
                         <ChatStatus status={aiStatus} />
                         <div className={`composer-wrapper ${composerInput ? 'has-text' : ''}`}>
+                            {mentionQuery && (
+                                <MentionAutocomplete
+                                    files={files}
+                                    query={mentionQuery.query}
+                                    position={mentionDropdownPosition}
+                                    selectedIndex={selectedMentionIndex}
+                                    onSelect={handleMentionSelect}
+                                    onClose={handleMentionClose}
+                                    onIndexChange={setSelectedMentionIndex}
+                                />
+                            )}
                             <textarea
                                 ref={composerRef}
                                 className="composer-input"
@@ -3752,8 +4759,50 @@ Respond ONLY with JSON:
                                         composerRef.current.style.height = 'auto';
                                         composerRef.current.style.height = composerRef.current.scrollHeight + 'px';
                                     }
+
+                                    // Mention detection
+                                    const value = e.target.value;
+                                    const cursorPos = e.target.selectionStart;
+                                    const textBeforeCursor = value.substring(0, cursorPos);
+                                    const mentionMatch = textBeforeCursor.match(/@([\w.-]*)$/);
+
+                                    if (mentionMatch) {
+                                        const query = mentionMatch[1];
+                                        const startIndex = cursorPos - mentionMatch[0].length;
+                                        const rect = e.target.getBoundingClientRect();
+
+                                        // Calculate position (approximation since we can't get exact caret coords easily)
+                                        // We place it above the textarea, shifted right based on cursor index
+                                        // A better solution would use a caret coordinates library, but this is a good MVP
+                                        setMentionQuery({ query, startIndex });
+                                        setMentionDropdownPosition({
+                                            top: rect.top - 310, // Max height (300) + gap (10)
+                                            left: rect.left + (Math.min(textBeforeCursor.length, 50) * 8) + 10 // Max 50 chars width
+                                        });
+                                        // Reset index when new query starts
+                                        if (!mentionQuery || mentionQuery.query !== query) {
+                                            setSelectedMentionIndex(0);
+                                        }
+                                    } else {
+                                        setMentionQuery(null);
+                                        setMentionDropdownPosition(null);
+                                    }
                                 }}
                                 onKeyDown={(e) => {
+                                    // If autocomplete is open, it handles arrow keys/enter via global listener
+                                    // But we need to prevent default behavior for some keys here
+                                    if (mentionQuery && mentionDropdownPosition) {
+                                        if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Enter' || e.key === 'Tab') {
+                                            e.preventDefault();
+                                            return;
+                                        }
+                                        if (e.key === 'Escape') {
+                                            e.preventDefault();
+                                            handleMentionClose();
+                                            return;
+                                        }
+                                    }
+
                                     if (e.key === 'Enter' && !e.shiftKey) {
                                         e.preventDefault();
                                         handleSubmitProposal();
@@ -3793,423 +4842,425 @@ Respond ONLY with JSON:
                 </aside>
             </div >
 
-            {showSettings && (
-                <div className="modal-overlay">
-                    <div className="modal">
-                        <button className="modal-close-btn" onClick={() => setShowSettings(false)}>
-                            <Icon name={X} size={20} />
-                        </button>
-                        <div className="modal-sidebar">
-                            <div className="modal-sidebar-title">Settings</div>
-                            <div
-                                className={`settings-menu-item ${activeSettingsMenu === 'AI Model' ? 'active' : ''}`}
-                                onClick={() => setActiveSettingsMenu('AI Model')}
-                            >
-                                <Icon name={CodeIcon} size={18} />
-                                <span>AI Model</span>
-                            </div>
-                            <div
-                                className={`settings-menu-item ${activeSettingsMenu === 'Display' ? 'active' : ''}`}
-                                onClick={() => setActiveSettingsMenu('Display')}
-                            >
-                                <Icon name={Maximize2} size={18} />
-                                <span>Display</span>
-                            </div>
-                            <div
-                                className={`settings-menu-item ${activeSettingsMenu === 'Agents' ? 'active' : ''}`}
-                                onClick={() => setActiveSettingsMenu('Agents')}
-                            >
-                                <Icon name={Users} size={18} />
-                                <span>Agents</span>
-                            </div>
-                        </div>
-
-                        <div className="modal-content-area">
-                            {activeSettingsMenu === 'AI Model' && (
-                                <div className="settings-content-centered">
-                                    <div className="settings-section-title">AI Model</div>
-                                    <div className="field" style={{ width: '100%' }}>
-                                        <label>OpenRouter API Key</label>
-                                        <input
-                                            type="password"
-                                            placeholder="sk-or-..."
-                                            className="input"
-                                            value={settings.apiKey}
-                                            onChange={(e) => setSettings({ ...settings, apiKey: e.target.value })}
-                                        />
-                                    </div>
-                                    <div className="field" style={{ width: '100%' }}>
-                                        <label>Coding Model</label>
-                                        <select
-                                            className="input"
-                                            value={settings.model}
-                                            onChange={(e) => setSettings({ ...settings, model: e.target.value })}
-                                        >
-                                            <option value="deepseek/deepseek-chat">DeepSeek Chat (Preferred)</option>
-                                            <option value="deepseek/deepseek-coder">DeepSeek Coder</option>
-                                            <option value="xiaomi/mimo-v2-flash:free">MiMo-V2 Flash (Xiaomi - Free)</option>
-                                            <option value="mistralai/devstral-2512:free">Devstral 2 2512 (Mistral - Free)</option>
-                                            <option value="kwaipilot/kat-coder-pro:free">KAT-Coder-Pro V1 (Kwai - Free)</option>
-                                            <option value="google/gemini-flash-1.5-8b">Gemini Flash 1.5</option>
-                                            <option value="mistralai/mistral-7b-instruct:free">Mistral 7B (Free)</option>
-                                        </select>
-                                    </div>
-                                    <div className="modal-actions" style={{ display: 'flex', gap: 12, justifyContent: 'center', marginTop: 32, width: '100%' }}>
-                                        <button className="btn btn-primary" style={{ padding: '12px 48px' }} onClick={async () => {
-                                            await window.api.saveSettings(settings);
-                                            setShowSettings(false);
-                                        }}>Save Changes</button>
-                                    </div>
+            {
+                showSettings && (
+                    <div className="modal-overlay">
+                        <div className="modal">
+                            <button className="modal-close-btn" onClick={() => setShowSettings(false)}>
+                                <Icon name={X} size={20} />
+                            </button>
+                            <div className="modal-sidebar">
+                                <div className="modal-sidebar-title">Settings</div>
+                                <div
+                                    className={`settings-menu-item ${activeSettingsMenu === 'AI Model' ? 'active' : ''}`}
+                                    onClick={() => setActiveSettingsMenu('AI Model')}
+                                >
+                                    <Icon name={CodeIcon} size={18} />
+                                    <span>AI Model</span>
                                 </div>
-                            )}
+                                <div
+                                    className={`settings-menu-item ${activeSettingsMenu === 'Display' ? 'active' : ''}`}
+                                    onClick={() => setActiveSettingsMenu('Display')}
+                                >
+                                    <Icon name={Maximize2} size={18} />
+                                    <span>Display</span>
+                                </div>
+                                <div
+                                    className={`settings-menu-item ${activeSettingsMenu === 'Agents' ? 'active' : ''}`}
+                                    onClick={() => setActiveSettingsMenu('Agents')}
+                                >
+                                    <Icon name={Users} size={18} />
+                                    <span>Agents</span>
+                                </div>
+                            </div>
 
-                            {activeSettingsMenu === 'Display' && (
-                                <div>
-                                    <div className="settings-section-title">Display</div>
-
-                                    <div className={`accordion ${expandedAccordions.has('chat') ? 'expanded' : ''} `}>
-                                        <div className="accordion-header" onClick={() => {
-                                            const newSet = new Set(expandedAccordions);
-                                            if (newSet.has('chat')) newSet.delete('chat');
-                                            else newSet.add('chat');
-                                            setExpandedAccordions(newSet);
-                                        }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                                <Icon name={MessageSquare} size={18} />
-                                                <span>Chat Personalization</span>
-                                            </div>
-                                            <Icon name={expandedAccordions.has('chat') ? ChevronUp : ChevronDown} size={18} />
+                            <div className="modal-content-area">
+                                {activeSettingsMenu === 'AI Model' && (
+                                    <div className="settings-content-centered">
+                                        <div className="settings-section-title">AI Model</div>
+                                        <div className="field" style={{ width: '100%' }}>
+                                            <label>OpenRouter API Key</label>
+                                            <input
+                                                type="password"
+                                                placeholder="sk-or-..."
+                                                className="input"
+                                                value={settings.apiKey}
+                                                onChange={(e) => setSettings({ ...settings, apiKey: e.target.value })}
+                                            />
                                         </div>
-                                        {expandedAccordions.has('chat') && (
-                                            <div className="accordion-content">
-                                                <div className="inner-accordion-container">
-                                                    {/* Sender's Bubble Accordion */}
-                                                    <div className={`inner-accordion ${expandedAccordions.has('sender-bubble') ? 'expanded' : ''}`}>
-                                                        <div className="inner-accordion-header" style={{ display: 'flex', justifyContent: 'space-between', cursor: 'pointer' }} onClick={() => {
-                                                            const newSet = new Set(expandedAccordions);
-                                                            if (newSet.has('sender-bubble')) newSet.delete('sender-bubble');
-                                                            else newSet.add('sender-bubble');
-                                                            setExpandedAccordions(newSet);
-                                                        }}>
-                                                            <span>Sender's Chat Bubble</span>
-                                                            <Icon name={expandedAccordions.has('sender-bubble') ? ChevronUp : ChevronDown} size={14} />
-                                                        </div>
-                                                        {expandedAccordions.has('sender-bubble') && (
-                                                            <div style={{ padding: '0 16px 16px' }}>
-                                                                <div className="color-picker-row">
-                                                                    <div style={{ display: 'flex', gap: 12 }}>
-                                                                        <div className="color-input-wrapper" title="Bubble Color">
-                                                                            <input
-                                                                                type="color"
-                                                                                value={settings.userBubbleColor || '#58a6ff'}
-                                                                                onChange={(e) => setSettings({ ...settings, userBubbleColor: e.target.value })}
-                                                                            />
-                                                                        </div>
-                                                                        <div className="color-input-wrapper" title="Text Color" style={{ borderColor: 'var(--text-secondary)' }}>
-                                                                            <Icon name={Type} size={14} style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', pointerEvents: 'none', zIndex: 1, color: settings.userTextColor }} />
-                                                                            <input
-                                                                                type="color"
-                                                                                value={settings.userTextColor || '#000000'}
-                                                                                onChange={(e) => setSettings({ ...settings, userTextColor: e.target.value })}
-                                                                            />
-                                                                        </div>
-                                                                    </div>
-                                                                    <div
-                                                                        className="color-preview-bubble"
-                                                                        style={{
-                                                                            backgroundColor: settings.userBubbleColor || '#58a6ff',
-                                                                            backgroundImage: settings.userBubbleBgImage ? `url(${settings.userBubbleBgImage})` : 'none',
-                                                                            backgroundSize: 'cover',
-                                                                            backgroundPosition: 'center',
-                                                                            color: settings.userTextColor || '#000000'
-                                                                        }}
-                                                                    >
-                                                                        User Message Preview
-                                                                    </div>
-                                                                </div>
-                                                                <div className="field" style={{ marginTop: 12 }}>
-                                                                    <label style={{ fontSize: '11px', opacity: 0.6, marginBottom: 4, display: 'block' }}>Bubble Background Image</label>
-                                                                    <div style={{ display: 'flex', gap: 8 }}>
-                                                                        <button className="btn btn-outline" style={{ flex: 1, height: 30, fontSize: '11px', padding: '0 8px' }} onClick={() => document.getElementById('user-bubble-bg-input').click()}>
-                                                                            Upload Image
-                                                                        </button>
-                                                                        {settings.userBubbleBgImage && (
-                                                                            <button className="btn btn-icon-sm" onClick={() => setSettings({ ...settings, userBubbleBgImage: '' })}>
-                                                                                <Icon name={X} size={12} />
-                                                                            </button>
-                                                                        )}
-                                                                    </div>
-                                                                    <input
-                                                                        id="user-bubble-bg-input"
-                                                                        type="file"
-                                                                        accept="image/*"
-                                                                        style={{ display: 'none' }}
-                                                                        onChange={(e) => {
-                                                                            const file = e.target.files[0];
-                                                                            if (file) {
-                                                                                const reader = new FileReader();
-                                                                                reader.onload = (event) => setSettings({ ...settings, userBubbleBgImage: event.target.result });
-                                                                                reader.readAsDataURL(file);
-                                                                            }
-                                                                        }}
-                                                                    />
-                                                                </div>
-                                                            </div>
-                                                        )}
-                                                    </div>
+                                        <div className="field" style={{ width: '100%' }}>
+                                            <label>Coding Model</label>
+                                            <select
+                                                className="input"
+                                                value={settings.model}
+                                                onChange={(e) => setSettings({ ...settings, model: e.target.value })}
+                                            >
+                                                <option value="deepseek/deepseek-chat">DeepSeek Chat (Preferred)</option>
+                                                <option value="deepseek/deepseek-coder">DeepSeek Coder</option>
+                                                <option value="xiaomi/mimo-v2-flash:free">MiMo-V2 Flash (Xiaomi - Free)</option>
+                                                <option value="mistralai/devstral-2512:free">Devstral 2 2512 (Mistral - Free)</option>
+                                                <option value="kwaipilot/kat-coder-pro:free">KAT-Coder-Pro V1 (Kwai - Free)</option>
+                                                <option value="google/gemini-flash-1.5-8b">Gemini Flash 1.5</option>
+                                                <option value="mistralai/mistral-7b-instruct:free">Mistral 7B (Free)</option>
+                                            </select>
+                                        </div>
+                                        <div className="modal-actions" style={{ display: 'flex', gap: 12, justifyContent: 'center', marginTop: 32, width: '100%' }}>
+                                            <button className="btn btn-primary" style={{ padding: '12px 48px' }} onClick={async () => {
+                                                await window.api.saveSettings(settings);
+                                                setShowSettings(false);
+                                            }}>Save Changes</button>
+                                        </div>
+                                    </div>
+                                )}
 
-                                                    {/* AI Response Accordion */}
-                                                    <div className={`inner-accordion ${expandedAccordions.has('ai-bubble') ? 'expanded' : ''}`}>
-                                                        <div className="inner-accordion-header" style={{ display: 'flex', justifyContent: 'space-between', cursor: 'pointer' }} onClick={() => {
-                                                            const newSet = new Set(expandedAccordions);
-                                                            if (newSet.has('ai-bubble')) newSet.delete('ai-bubble');
-                                                            else newSet.add('ai-bubble');
-                                                            setExpandedAccordions(newSet);
-                                                        }}>
-                                                            <span>AI Response</span>
-                                                            <Icon name={expandedAccordions.has('ai-bubble') ? ChevronUp : ChevronDown} size={14} />
-                                                        </div>
-                                                        {expandedAccordions.has('ai-bubble') && (
-                                                            <div style={{ padding: '0 16px 16px' }}>
-                                                                <div className="color-picker-row">
-                                                                    <div style={{ display: 'flex', gap: 12 }}>
-                                                                        <div className="color-input-wrapper" title="Bubble Color">
-                                                                            <input
-                                                                                type="color"
-                                                                                value={settings.aiBubbleColor || '#161b22'}
-                                                                                onChange={(e) => setSettings({ ...settings, aiBubbleColor: e.target.value })}
-                                                                            />
-                                                                        </div>
-                                                                        <div className="color-input-wrapper" title="Text Color" style={{ borderColor: 'var(--text-secondary)' }}>
-                                                                            <Icon name={Type} size={14} style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', pointerEvents: 'none', zIndex: 1, color: settings.aiTextColor }} />
-                                                                            <input
-                                                                                type="color"
-                                                                                value={settings.aiTextColor || '#e6edf3'}
-                                                                                onChange={(e) => setSettings({ ...settings, aiTextColor: e.target.value })}
-                                                                            />
-                                                                        </div>
-                                                                    </div>
-                                                                    <div
-                                                                        className="color-preview-bubble"
-                                                                        style={{
-                                                                            backgroundColor: settings.aiBubbleColor || '#161b22',
-                                                                            border: '1px solid var(--border-color)',
-                                                                            backgroundImage: settings.aiBubbleBgImage ? `url(${settings.aiBubbleBgImage})` : 'none',
-                                                                            backgroundSize: 'cover',
-                                                                            backgroundPosition: 'center',
-                                                                            color: settings.aiTextColor || '#e6edf3'
-                                                                        }}
-                                                                    >
-                                                                        AI Response Preview
-                                                                    </div>
-                                                                </div>
-                                                                <div className="field" style={{ marginTop: 12 }}>
-                                                                    <label style={{ fontSize: '11px', opacity: 0.6, marginBottom: 4, display: 'block' }}>Bubble Background Image</label>
-                                                                    <div style={{ display: 'flex', gap: 8 }}>
-                                                                        <button className="btn btn-outline" style={{ flex: 1, height: 30, fontSize: '11px', padding: '0 8px' }} onClick={() => document.getElementById('ai-bubble-bg-input').click()}>
-                                                                            Upload Image
-                                                                        </button>
-                                                                        {settings.aiBubbleBgImage && (
-                                                                            <button className="btn btn-icon-sm" onClick={() => setSettings({ ...settings, aiBubbleBgImage: '' })}>
-                                                                                <Icon name={X} size={12} />
-                                                                            </button>
-                                                                        )}
-                                                                    </div>
-                                                                    <input
-                                                                        id="ai-bubble-bg-input"
-                                                                        type="file"
-                                                                        accept="image/*"
-                                                                        style={{ display: 'none' }}
-                                                                        onChange={(e) => {
-                                                                            const file = e.target.files[0];
-                                                                            if (file) {
-                                                                                const reader = new FileReader();
-                                                                                reader.onload = (event) => setSettings({ ...settings, aiBubbleBgImage: event.target.result });
-                                                                                reader.readAsDataURL(file);
-                                                                            }
-                                                                        }}
-                                                                    />
-                                                                </div>
-                                                            </div>
-                                                        )}
-                                                    </div>
+                                {activeSettingsMenu === 'Display' && (
+                                    <div>
+                                        <div className="settings-section-title">Display</div>
 
-                                                    {/* Background Image Accordion */}
-                                                    <div className={`inner-accordion ${expandedAccordions.has('bg-image') ? 'expanded' : ''}`}>
-                                                        <div className="inner-accordion-header" style={{ display: 'flex', justifyContent: 'space-between', cursor: 'pointer' }} onClick={() => {
-                                                            const newSet = new Set(expandedAccordions);
-                                                            if (newSet.has('bg-image')) newSet.delete('bg-image');
-                                                            else newSet.add('bg-image');
-                                                            setExpandedAccordions(newSet);
-                                                        }}>
-                                                            <span>Background Image</span>
-                                                            <Icon name={expandedAccordions.has('bg-image') ? ChevronUp : ChevronDown} size={14} />
-                                                        </div>
-                                                        {expandedAccordions.has('bg-image') && (
-                                                            <div style={{ padding: '0 16px 16px' }}>
-                                                                <div className="field" style={{ marginTop: 8 }}>
-                                                                    <label style={{ fontSize: '11px', opacity: 0.6, marginBottom: 8, display: 'block' }}>Choose a local image for chat background</label>
-                                                                    <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                                                                        <button
-                                                                            className="btn btn-outline"
-                                                                            style={{ flex: 1, height: 36, padding: '0 12px', fontSize: '12px' }}
-                                                                            onClick={() => document.getElementById('bg-image-input').click()}
+                                        <div className={`accordion ${expandedAccordions.has('chat') ? 'expanded' : ''} `}>
+                                            <div className="accordion-header" onClick={() => {
+                                                const newSet = new Set(expandedAccordions);
+                                                if (newSet.has('chat')) newSet.delete('chat');
+                                                else newSet.add('chat');
+                                                setExpandedAccordions(newSet);
+                                            }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                                    <Icon name={MessageSquare} size={18} />
+                                                    <span>Chat Personalization</span>
+                                                </div>
+                                                <Icon name={expandedAccordions.has('chat') ? ChevronUp : ChevronDown} size={18} />
+                                            </div>
+                                            {expandedAccordions.has('chat') && (
+                                                <div className="accordion-content">
+                                                    <div className="inner-accordion-container">
+                                                        {/* Sender's Bubble Accordion */}
+                                                        <div className={`inner-accordion ${expandedAccordions.has('sender-bubble') ? 'expanded' : ''}`}>
+                                                            <div className="inner-accordion-header" style={{ display: 'flex', justifyContent: 'space-between', cursor: 'pointer' }} onClick={() => {
+                                                                const newSet = new Set(expandedAccordions);
+                                                                if (newSet.has('sender-bubble')) newSet.delete('sender-bubble');
+                                                                else newSet.add('sender-bubble');
+                                                                setExpandedAccordions(newSet);
+                                                            }}>
+                                                                <span>Sender's Chat Bubble</span>
+                                                                <Icon name={expandedAccordions.has('sender-bubble') ? ChevronUp : ChevronDown} size={14} />
+                                                            </div>
+                                                            {expandedAccordions.has('sender-bubble') && (
+                                                                <div style={{ padding: '0 16px 16px' }}>
+                                                                    <div className="color-picker-row">
+                                                                        <div style={{ display: 'flex', gap: 12 }}>
+                                                                            <div className="color-input-wrapper" title="Bubble Color">
+                                                                                <input
+                                                                                    type="color"
+                                                                                    value={settings.userBubbleColor || '#58a6ff'}
+                                                                                    onChange={(e) => setSettings({ ...settings, userBubbleColor: e.target.value })}
+                                                                                />
+                                                                            </div>
+                                                                            <div className="color-input-wrapper" title="Text Color" style={{ borderColor: 'var(--text-secondary)' }}>
+                                                                                <Icon name={Type} size={14} style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', pointerEvents: 'none', zIndex: 1, color: settings.userTextColor }} />
+                                                                                <input
+                                                                                    type="color"
+                                                                                    value={settings.userTextColor || '#000000'}
+                                                                                    onChange={(e) => setSettings({ ...settings, userTextColor: e.target.value })}
+                                                                                />
+                                                                            </div>
+                                                                        </div>
+                                                                        <div
+                                                                            className="color-preview-bubble"
+                                                                            style={{
+                                                                                backgroundColor: settings.userBubbleColor || '#58a6ff',
+                                                                                backgroundImage: settings.userBubbleBgImage ? `url(${settings.userBubbleBgImage})` : 'none',
+                                                                                backgroundSize: 'cover',
+                                                                                backgroundPosition: 'center',
+                                                                                color: settings.userTextColor || '#000000'
+                                                                            }}
                                                                         >
-                                                                            <Icon name={FolderOpen} size={14} style={{ marginRight: 8 }} />
-                                                                            Upload Image
-                                                                        </button>
-                                                                        {settings.chatBgImage && (
-                                                                            <button
-                                                                                className="btn btn-icon-sm"
-                                                                                title="Remove Background"
-                                                                                onClick={() => setSettings({ ...settings, chatBgImage: '' })}
-                                                                            >
-                                                                                <Icon name={X} size={14} />
+                                                                            User Message Preview
+                                                                        </div>
+                                                                    </div>
+                                                                    <div className="field" style={{ marginTop: 12 }}>
+                                                                        <label style={{ fontSize: '11px', opacity: 0.6, marginBottom: 4, display: 'block' }}>Bubble Background Image</label>
+                                                                        <div style={{ display: 'flex', gap: 8 }}>
+                                                                            <button className="btn btn-outline" style={{ flex: 1, height: 30, fontSize: '11px', padding: '0 8px' }} onClick={() => document.getElementById('user-bubble-bg-input').click()}>
+                                                                                Upload Image
                                                                             </button>
-                                                                        )}
+                                                                            {settings.userBubbleBgImage && (
+                                                                                <button className="btn btn-icon-sm" onClick={() => setSettings({ ...settings, userBubbleBgImage: '' })}>
+                                                                                    <Icon name={X} size={12} />
+                                                                                </button>
+                                                                            )}
+                                                                        </div>
+                                                                        <input
+                                                                            id="user-bubble-bg-input"
+                                                                            type="file"
+                                                                            accept="image/*"
+                                                                            style={{ display: 'none' }}
+                                                                            onChange={(e) => {
+                                                                                const file = e.target.files[0];
+                                                                                if (file) {
+                                                                                    const reader = new FileReader();
+                                                                                    reader.onload = (event) => setSettings({ ...settings, userBubbleBgImage: event.target.result });
+                                                                                    reader.readAsDataURL(file);
+                                                                                }
+                                                                            }}
+                                                                        />
                                                                     </div>
-                                                                    <input
-                                                                        id="bg-image-input"
-                                                                        type="file"
-                                                                        accept="image/*"
-                                                                        style={{ display: 'none' }}
-                                                                        onChange={(e) => {
-                                                                            const file = e.target.files[0];
-                                                                            if (file) {
-                                                                                const reader = new FileReader();
-                                                                                reader.onload = (event) => {
-                                                                                    setSettings({ ...settings, chatBgImage: event.target.result });
-                                                                                };
-                                                                                reader.readAsDataURL(file);
-                                                                            }
-                                                                        }}
-                                                                    />
                                                                 </div>
-                                                                {settings.chatBgImage && (
-                                                                    <div style={{ marginTop: 16, width: '100%', height: 100, borderRadius: 12, overflow: 'hidden', border: '1px solid var(--border-color)' }}>
-                                                                        <img src={settings.chatBgImage} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                                                                    </div>
-                                                                )}
+                                                            )}
+                                                        </div>
+
+                                                        {/* AI Response Accordion */}
+                                                        <div className={`inner-accordion ${expandedAccordions.has('ai-bubble') ? 'expanded' : ''}`}>
+                                                            <div className="inner-accordion-header" style={{ display: 'flex', justifyContent: 'space-between', cursor: 'pointer' }} onClick={() => {
+                                                                const newSet = new Set(expandedAccordions);
+                                                                if (newSet.has('ai-bubble')) newSet.delete('ai-bubble');
+                                                                else newSet.add('ai-bubble');
+                                                                setExpandedAccordions(newSet);
+                                                            }}>
+                                                                <span>AI Response</span>
+                                                                <Icon name={expandedAccordions.has('ai-bubble') ? ChevronUp : ChevronDown} size={14} />
                                                             </div>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
+                                                            {expandedAccordions.has('ai-bubble') && (
+                                                                <div style={{ padding: '0 16px 16px' }}>
+                                                                    <div className="color-picker-row">
+                                                                        <div style={{ display: 'flex', gap: 12 }}>
+                                                                            <div className="color-input-wrapper" title="Bubble Color">
+                                                                                <input
+                                                                                    type="color"
+                                                                                    value={settings.aiBubbleColor || '#161b22'}
+                                                                                    onChange={(e) => setSettings({ ...settings, aiBubbleColor: e.target.value })}
+                                                                                />
+                                                                            </div>
+                                                                            <div className="color-input-wrapper" title="Text Color" style={{ borderColor: 'var(--text-secondary)' }}>
+                                                                                <Icon name={Type} size={14} style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', pointerEvents: 'none', zIndex: 1, color: settings.aiTextColor }} />
+                                                                                <input
+                                                                                    type="color"
+                                                                                    value={settings.aiTextColor || '#e6edf3'}
+                                                                                    onChange={(e) => setSettings({ ...settings, aiTextColor: e.target.value })}
+                                                                                />
+                                                                            </div>
+                                                                        </div>
+                                                                        <div
+                                                                            className="color-preview-bubble"
+                                                                            style={{
+                                                                                backgroundColor: settings.aiBubbleColor || '#161b22',
+                                                                                border: '1px solid var(--border-color)',
+                                                                                backgroundImage: settings.aiBubbleBgImage ? `url(${settings.aiBubbleBgImage})` : 'none',
+                                                                                backgroundSize: 'cover',
+                                                                                backgroundPosition: 'center',
+                                                                                color: settings.aiTextColor || '#e6edf3'
+                                                                            }}
+                                                                        >
+                                                                            AI Response Preview
+                                                                        </div>
+                                                                    </div>
+                                                                    <div className="field" style={{ marginTop: 12 }}>
+                                                                        <label style={{ fontSize: '11px', opacity: 0.6, marginBottom: 4, display: 'block' }}>Bubble Background Image</label>
+                                                                        <div style={{ display: 'flex', gap: 8 }}>
+                                                                            <button className="btn btn-outline" style={{ flex: 1, height: 30, fontSize: '11px', padding: '0 8px' }} onClick={() => document.getElementById('ai-bubble-bg-input').click()}>
+                                                                                Upload Image
+                                                                            </button>
+                                                                            {settings.aiBubbleBgImage && (
+                                                                                <button className="btn btn-icon-sm" onClick={() => setSettings({ ...settings, aiBubbleBgImage: '' })}>
+                                                                                    <Icon name={X} size={12} />
+                                                                                </button>
+                                                                            )}
+                                                                        </div>
+                                                                        <input
+                                                                            id="ai-bubble-bg-input"
+                                                                            type="file"
+                                                                            accept="image/*"
+                                                                            style={{ display: 'none' }}
+                                                                            onChange={(e) => {
+                                                                                const file = e.target.files[0];
+                                                                                if (file) {
+                                                                                    const reader = new FileReader();
+                                                                                    reader.onload = (event) => setSettings({ ...settings, aiBubbleBgImage: event.target.result });
+                                                                                    reader.readAsDataURL(file);
+                                                                                }
+                                                                            }}
+                                                                        />
+                                                                    </div>
+                                                                </div>
+                                                            )}
+                                                        </div>
 
-                                    <div className={`accordion ${expandedAccordions.has('startup-text') ? 'expanded' : ''} `}>
-                                        <div className="accordion-header" onClick={() => {
-                                            const newSet = new Set(expandedAccordions);
-                                            if (newSet.has('startup-text')) newSet.delete('startup-text');
-                                            else newSet.add('startup-text');
-                                            setExpandedAccordions(newSet);
-                                        }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                                <Icon name={Type} size={18} />
-                                                <span>Startup Text</span>
-                                            </div>
-                                            <Icon name={expandedAccordions.has('startup-text') ? ChevronUp : ChevronDown} size={18} />
-                                        </div>
-                                        {expandedAccordions.has('startup-text') && (
-                                            <div className="accordion-content">
-                                                <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '8px 4px' }}>
-                                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                                        <span style={{ fontSize: '13px', opacity: 0.8 }}>"Hello!" Color</span>
-                                                        <div className="color-input-wrapper">
-                                                            <input
-                                                                type="color"
-                                                                value={settings.startupHelloColor || '#e6edf3'}
-                                                                onChange={(e) => setSettings({ ...settings, startupHelloColor: e.target.value })}
-                                                            />
+                                                        {/* Background Image Accordion */}
+                                                        <div className={`inner-accordion ${expandedAccordions.has('bg-image') ? 'expanded' : ''}`}>
+                                                            <div className="inner-accordion-header" style={{ display: 'flex', justifyContent: 'space-between', cursor: 'pointer' }} onClick={() => {
+                                                                const newSet = new Set(expandedAccordions);
+                                                                if (newSet.has('bg-image')) newSet.delete('bg-image');
+                                                                else newSet.add('bg-image');
+                                                                setExpandedAccordions(newSet);
+                                                            }}>
+                                                                <span>Background Image</span>
+                                                                <Icon name={expandedAccordions.has('bg-image') ? ChevronUp : ChevronDown} size={14} />
+                                                            </div>
+                                                            {expandedAccordions.has('bg-image') && (
+                                                                <div style={{ padding: '0 16px 16px' }}>
+                                                                    <div className="field" style={{ marginTop: 8 }}>
+                                                                        <label style={{ fontSize: '11px', opacity: 0.6, marginBottom: 8, display: 'block' }}>Choose a local image for chat background</label>
+                                                                        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                                                                            <button
+                                                                                className="btn btn-outline"
+                                                                                style={{ flex: 1, height: 36, padding: '0 12px', fontSize: '12px' }}
+                                                                                onClick={() => document.getElementById('bg-image-input').click()}
+                                                                            >
+                                                                                <Icon name={FolderOpen} size={14} style={{ marginRight: 8 }} />
+                                                                                Upload Image
+                                                                            </button>
+                                                                            {settings.chatBgImage && (
+                                                                                <button
+                                                                                    className="btn btn-icon-sm"
+                                                                                    title="Remove Background"
+                                                                                    onClick={() => setSettings({ ...settings, chatBgImage: '' })}
+                                                                                >
+                                                                                    <Icon name={X} size={14} />
+                                                                                </button>
+                                                                            )}
+                                                                        </div>
+                                                                        <input
+                                                                            id="bg-image-input"
+                                                                            type="file"
+                                                                            accept="image/*"
+                                                                            style={{ display: 'none' }}
+                                                                            onChange={(e) => {
+                                                                                const file = e.target.files[0];
+                                                                                if (file) {
+                                                                                    const reader = new FileReader();
+                                                                                    reader.onload = (event) => {
+                                                                                        setSettings({ ...settings, chatBgImage: event.target.result });
+                                                                                    };
+                                                                                    reader.readAsDataURL(file);
+                                                                                }
+                                                                            }}
+                                                                        />
+                                                                    </div>
+                                                                    {settings.chatBgImage && (
+                                                                        <div style={{ marginTop: 16, width: '100%', height: 100, borderRadius: 12, overflow: 'hidden', border: '1px solid var(--border-color)' }}>
+                                                                            <img src={settings.chatBgImage} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            )}
                                                         </div>
                                                     </div>
-                                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                                        <span style={{ fontSize: '13px', opacity: 0.8 }}>Message Color</span>
-                                                        <div className="color-input-wrapper">
-                                                            <input
-                                                                type="color"
-                                                                value={settings.startupMsgColor || '#8b949e'}
-                                                                onChange={(e) => setSettings({ ...settings, startupMsgColor: e.target.value })}
-                                                            />
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <div className={`accordion ${expandedAccordions.has('startup-text') ? 'expanded' : ''} `}>
+                                            <div className="accordion-header" onClick={() => {
+                                                const newSet = new Set(expandedAccordions);
+                                                if (newSet.has('startup-text')) newSet.delete('startup-text');
+                                                else newSet.add('startup-text');
+                                                setExpandedAccordions(newSet);
+                                            }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                                    <Icon name={Type} size={18} />
+                                                    <span>Startup Text</span>
+                                                </div>
+                                                <Icon name={expandedAccordions.has('startup-text') ? ChevronUp : ChevronDown} size={18} />
+                                            </div>
+                                            {expandedAccordions.has('startup-text') && (
+                                                <div className="accordion-content">
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '8px 4px' }}>
+                                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                                            <span style={{ fontSize: '13px', opacity: 0.8 }}>"Hello!" Color</span>
+                                                            <div className="color-input-wrapper">
+                                                                <input
+                                                                    type="color"
+                                                                    value={settings.startupHelloColor || '#e6edf3'}
+                                                                    onChange={(e) => setSettings({ ...settings, startupHelloColor: e.target.value })}
+                                                                />
+                                                            </div>
+                                                        </div>
+                                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                                            <span style={{ fontSize: '13px', opacity: 0.8 }}>Message Color</span>
+                                                            <div className="color-input-wrapper">
+                                                                <input
+                                                                    type="color"
+                                                                    value={settings.startupMsgColor || '#8b949e'}
+                                                                    onChange={(e) => setSettings({ ...settings, startupMsgColor: e.target.value })}
+                                                                />
+                                                            </div>
                                                         </div>
                                                     </div>
                                                 </div>
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    <div className="modal-actions" style={{ display: 'flex', gap: 12, justifyContent: 'space-between', alignItems: 'center', marginTop: 32 }}>
-                                        <button className="btn btn-outline" style={{ color: 'var(--accent-error)', borderColor: 'rgba(248, 81, 73, 0.2)' }} onClick={async () => {
-                                            const defaults = {
-                                                userBubbleColor: '#58a6ff',
-                                                aiBubbleColor: '#161b22',
-                                                userTextColor: '#000000',
-                                                aiTextColor: '#e6edf3',
-                                                chatBgImage: '',
-                                                userBubbleBgImage: '',
-                                                aiBubbleBgImage: '',
-                                                startupHelloColor: '#e6edf3',
-                                                startupMsgColor: '#8b949e'
-                                            };
-                                            const updatedSettings = { ...settings, ...defaults };
-                                            setSettings(updatedSettings);
-                                            await window.api.saveSettings(updatedSettings);
-                                        }}>Reset to Default</button>
-                                        <button className="btn btn-primary" onClick={async () => {
-                                            await window.api.saveSettings(settings);
-                                            setShowSettings(false);
-                                        }}>Apply Changes</button>
-                                    </div>
-                                </div>
-                            )}
-
-                            {activeSettingsMenu === 'Agents' && (
-                                <div>
-                                    <div className="settings-section-title">Agents</div>
-                                    <div className={`accordion ${expandedAccordions.has('agent-permissions') ? 'expanded' : ''} `}>
-                                        <div className="accordion-header" onClick={() => {
-                                            const newSet = new Set(expandedAccordions);
-                                            if (newSet.has('agent-permissions')) newSet.delete('agent-permissions');
-                                            else newSet.add('agent-permissions');
-                                            setExpandedAccordions(newSet);
-                                        }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                                <Icon name={ShieldCheck} size={18} />
-                                                <span>Permissions</span>
-                                            </div>
-                                            <Icon name={expandedAccordions.has('agent-permissions') ? ChevronUp : ChevronDown} size={18} />
+                                            )}
                                         </div>
-                                        {expandedAccordions.has('agent-permissions') && (
-                                            <div className="accordion-content">
-                                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0' }}>
-                                                    <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Agent asking for permission before execution</span>
-                                                    <select
-                                                        className="input"
-                                                        style={{ width: 'auto', minWidth: '240px' }}
-                                                        value={settings.agentExecutionMode}
-                                                        onChange={(e) => setSettings({ ...settings, agentExecutionMode: e.target.value })}
-                                                    >
-                                                        <option value="permission">asks for permission before every critical execution</option>
-                                                        <option value="autonomous">AI fully runs autonomously</option>
-                                                    </select>
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
 
-                                    <div className="modal-actions" style={{ display: 'flex', justifyContent: 'center', marginTop: 32 }}>
-                                        <button className="btn btn-primary" style={{ padding: '12px 48px' }} onClick={async () => {
-                                            await window.api.saveSettings(settings);
-                                            setShowSettings(false);
-                                        }}>Save Changes</button>
+                                        <div className="modal-actions" style={{ display: 'flex', gap: 12, justifyContent: 'space-between', alignItems: 'center', marginTop: 32 }}>
+                                            <button className="btn btn-outline" style={{ color: 'var(--accent-error)', borderColor: 'rgba(248, 81, 73, 0.2)' }} onClick={async () => {
+                                                const defaults = {
+                                                    userBubbleColor: '#58a6ff',
+                                                    aiBubbleColor: '#161b22',
+                                                    userTextColor: '#000000',
+                                                    aiTextColor: '#e6edf3',
+                                                    chatBgImage: '',
+                                                    userBubbleBgImage: '',
+                                                    aiBubbleBgImage: '',
+                                                    startupHelloColor: '#e6edf3',
+                                                    startupMsgColor: '#8b949e'
+                                                };
+                                                const updatedSettings = { ...settings, ...defaults };
+                                                setSettings(updatedSettings);
+                                                await window.api.saveSettings(updatedSettings);
+                                            }}>Reset to Default</button>
+                                            <button className="btn btn-primary" onClick={async () => {
+                                                await window.api.saveSettings(settings);
+                                                setShowSettings(false);
+                                            }}>Apply Changes</button>
+                                        </div>
                                     </div>
-                                </div>
-                            )}
+                                )}
+
+                                {activeSettingsMenu === 'Agents' && (
+                                    <div>
+                                        <div className="settings-section-title">Agents</div>
+                                        <div className={`accordion ${expandedAccordions.has('agent-permissions') ? 'expanded' : ''} `}>
+                                            <div className="accordion-header" onClick={() => {
+                                                const newSet = new Set(expandedAccordions);
+                                                if (newSet.has('agent-permissions')) newSet.delete('agent-permissions');
+                                                else newSet.add('agent-permissions');
+                                                setExpandedAccordions(newSet);
+                                            }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                                    <Icon name={ShieldCheck} size={18} />
+                                                    <span>Permissions</span>
+                                                </div>
+                                                <Icon name={expandedAccordions.has('agent-permissions') ? ChevronUp : ChevronDown} size={18} />
+                                            </div>
+                                            {expandedAccordions.has('agent-permissions') && (
+                                                <div className="accordion-content">
+                                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0' }}>
+                                                        <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Agent asking for permission before execution</span>
+                                                        <select
+                                                            className="input"
+                                                            style={{ width: 'auto', minWidth: '240px' }}
+                                                            value={settings.agentExecutionMode}
+                                                            onChange={(e) => setSettings({ ...settings, agentExecutionMode: e.target.value })}
+                                                        >
+                                                            <option value="permission">asks for permission before every critical execution</option>
+                                                            <option value="autonomous">AI fully runs autonomously</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <div className="modal-actions" style={{ display: 'flex', justifyContent: 'center', marginTop: 32 }}>
+                                            <button className="btn btn-primary" style={{ padding: '12px 48px' }} onClick={async () => {
+                                                await window.api.saveSettings(settings);
+                                                setShowSettings(false);
+                                            }}>Save Changes</button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
+                )
+            }
 
             {
                 confirmDialog && (
@@ -4219,6 +5270,12 @@ Respond ONLY with JSON:
                     />
                 )
             }
+
+            <ProjectWizardModal
+                isOpen={showProjectWizard}
+                onClose={() => setShowProjectWizard(false)}
+                onCreateProject={handleCreateProject}
+            />
         </div >
     );
 };

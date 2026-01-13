@@ -1,249 +1,476 @@
-import { AGENT_MODES, SYSTEM_PROMPTS } from './AgentStateDefinitions.js';
+/**
+ * AgentManager.js
+ * 
+ * Manages autonomous agent sessions using OpenRouter function calling.
+ * Replaces the old JSON-parsing approach with native tool use.
+ */
 
-export class AgentManager {
-    constructor(aiService, addLog, updateUI) {
+window.AgentManager = class AgentManager {
+    constructor(aiService, callbacks) {
         this.ai = aiService;
-        this.addLog = addLog;
-        this.updateUI = updateUI;
-        this.sessions = []; // { id, goal, history, status, variables }
-        this.activeSessionId = null;
+        this.addLog = callbacks.addLog;
+        this.updateUI = callbacks.updateUI;
+        this.updateSession = callbacks.updateSession;
+        this.loadFiles = callbacks.loadFiles; // For refreshing file explorer
+        this.refreshActiveFile = callbacks.refreshActiveFile; // For refreshing editor content
+        this.sessions = new Map(); // sessionId -> session data
     }
 
-    // --- OLD FLOW (Deprecated-ish, keeping for reference if needed, or we can replace usage) ---
-    // We will redirect "createProposal" to the new flow if we want "Vibe Coding" to be default.
-    // For now, let's keep it but add the new Autonomous Flow.
+    /**
+     * Start a new agent session
+     * @param {string} goal - The user's goal/task
+     * @param {string} chatId - The chat ID this session belongs to
+     * @param {string} workspace - The workspace path
+     * @param {string} activeFile - The currently active file path (optional)
+     * @returns {number} sessionId
+     */
+    async startSession(goal, chatId, workspace, activeFile = null) {
+        const sessionId = Date.now();
 
-    async startAutonomousSession(goal) {
-        const session = {
-            id: Date.now(),
-            goal,
-            mode: AGENT_MODES.AUTONOMOUS,
-            history: [], // [{ role, content }]
-            conversation: [], // For UI display
-            status: 'running',
-            variables: {
-                workingDirectory: '.' // Track current working directory
+        // Read active file content if provided
+        let activeFileContent = '';
+        let activeFileName = '';
+        let relativeActiveFilePath = '';
+        let activeFileLanguage = 'plaintext';
+
+        if (activeFile) {
+            try {
+                activeFileContent = await window.api.readFile(activeFile);
+                activeFileName = activeFile.split(/[/\\]/).pop();
+
+                // Calculate relative path for context
+                if (activeFile.startsWith(workspace)) {
+                    relativeActiveFilePath = activeFile.slice(workspace.length).replace(/^[/\\]/, '').replace(/\\/g, '/');
+                } else {
+                    relativeActiveFilePath = activeFileName;
+                }
+
+                activeFileLanguage = this.getLanguageForFile(activeFileName);
+            } catch (e) {
+                console.warn('Could not read active file:', e);
             }
+        }
+
+        const session = {
+            id: sessionId,
+            chatId: chatId,
+            goal: goal,
+            workspace: workspace,
+            activeFile: activeFile,
+            activeFileName: activeFileName,
+            relativeActiveFilePath: relativeActiveFilePath,
+            status: 'running',
+            history: [
+                {
+                    role: 'system',
+                    content: `You are an autonomous coding agent with access to file operations and terminal commands.
+
+${activeFile ? `**Current File Context:**
+File: ${activeFileName}
+Relative Path: ${relativeActiveFilePath} (ALWAYS use this path when modifying the file)
+Absolute Path: ${activeFile}
+
+\`\`\`${activeFileLanguage}
+${activeFileContent}
+\`\`\`
+
+` : ''}**Your Goal:** ${goal}
+
+**Available Tools:**
+- read_file: Read file contents to examine existing code
+- write_file: MODIFY existing files ONLY (do NOT create new files - only update the active file or @-mentioned files)
+- list_directory: List directory contents to explore project structure
+- run_command: Execute terminal commands (npm, git, etc.)
+- ask_user: Ask for clarification when needed
+
+**IMPORTANT CONSTRAINTS:**
+- You can ONLY modify existing files (the currently open file or files mentioned with @filename)
+- DO NOT create new files - this is a file-scoped editor
+- ALWAYS use the relative path "${relativeActiveFilePath}" when modifying the active file
+- Focus on improving/modifying the active file based on the user's request
+- If you need to reference other files, ask the user to @mention them
+
+**Instructions:**
+1. ${activeFile ? `You are currently working on ${relativeActiveFilePath} - this is the file you should modify` : 'Think step-by-step about the task'}
+2. If the user mentions other files with @filename, you can read and reference those files
+3. Use tools as needed to accomplish the goal
+4. Always read files before modifying them (unless you already have the content)
+5. Provide complete file contents when writing, not snippets
+6. When finished, respond with a summary of what you accomplished
+
+Begin working on the task now.`
+                },
+                {
+                    role: 'user',
+                    content: `Start working on: ${goal}`
+                }
+            ],
+            logs: [],
+            createdAt: Date.now()
         };
-        this.sessions.unshift(session);
-        this.activeSessionId = session.id;
-        this.updateUI();
 
-        this.addLog(`Agent: Starting autonomous session for "${goal}"`);
+        this.sessions.set(sessionId, session);
 
-        // Start the loop
-        this.runAppBuilderLoop(session);
-        return session;
+        // Start the agent loop (don't await - runs in background)
+        this.runAgentLoop(sessionId).catch(err => {
+            this.addLog(`Agent session ${sessionId} error: ${err.message}`);
+            this.updateSession(sessionId, { status: 'error', error: err.message });
+        });
+
+        return sessionId;
     }
 
-    async runAppBuilderLoop(session) {
+    /**
+     * Main agent loop - runs until completion or error
+     */
+    async runAgentLoop(sessionId) {
+        const session = this.sessions.get(sessionId);
+        if (!session) {
+            throw new Error(`Session ${sessionId} not found`);
+        }
+
         const MAX_STEPS = 50;
         let stepCount = 0;
 
-        // Initial Context (only if not resuming)
-        if (session.history.length === 0) {
-            session.history.push({
-                role: 'system',
-                content: SYSTEM_PROMPTS[AGENT_MODES.AUTONOMOUS]
-            });
-            session.history.push({
-                role: 'user',
-                content: `Goal: ${session.goal}. Start.`
-            });
-        }
+        this.addLog(`🤖 Agent started: ${session.goal}`);
 
         while (session.status === 'running' && stepCount < MAX_STEPS) {
             stepCount++;
-            this.addLog(`Agent: Thinking (Step ${stepCount})...`);
+            this.addLog(`💭 Step ${stepCount}: Thinking...`);
+            this.updateSession(sessionId, { status: 'thinking', currentStep: stepCount });
 
             try {
-                // 1. THINK
-                const response = await this.ai.chat(session.history);
-                const thoughtProcess = this.parseResponse(response);
+                // Call AI with tools
+                const response = await this.ai.chat(
+                    session.history,
+                    null,           // no streaming for agent loop
+                    null,           // no abort signal
+                    null,           // use default model
+                    window.AGENT_TOOLS     // pass tools for function calling
+                );
 
-                if (!thoughtProcess) {
-                    this.addLog("Agent: Error parsing response. Retrying...");
-                    session.history.push({ role: 'user', content: "Invalid JSON. Please output STRICT JSON as requested." });
+                // Extract the message from response
+                const message = response.choices[0].message;
+
+                // Add AI's response to history
+                session.history.push(message);
+
+                // Check if AI wants to use tools
+                if (message.tool_calls && message.tool_calls.length > 0) {
+                    this.updateSession(sessionId, { status: 'executing' });
+
+                    // Execute each tool call
+                    for (const toolCall of message.tool_calls) {
+                        const toolName = toolCall.function.name;
+                        let toolArgs;
+
+                        try {
+                            toolArgs = JSON.parse(toolCall.function.arguments);
+                        } catch (e) {
+                            this.addLog(`⚠️ Failed to parse tool arguments: ${e.message}`);
+                            continue;
+                        }
+
+                        this.addLog(`🔧 Executing: ${toolName}(${JSON.stringify(toolArgs).substring(0, 50)}...)`);
+
+                        // Execute the tool
+                        const result = await this.executeTool(
+                            toolName,
+                            toolArgs,
+                            session
+                        );
+
+                        // Add tool result to history (required by OpenAI spec)
+                        session.history.push({
+                            role: 'tool',
+                            tool_call_id: toolCall.id,
+                            name: toolName,
+                            content: JSON.stringify(result)
+                        });
+
+                        // Log result (truncated)
+                        const resultStr = JSON.stringify(result);
+                        const truncated = resultStr.length > 100
+                            ? resultStr.substring(0, 100) + '...'
+                            : resultStr;
+                        this.addLog(`✅ Result: ${truncated}`);
+                    }
+
+                    // Continue loop - AI will process tool results in next iteration
+                    this.updateUI();
                     continue;
                 }
 
-                this.addLog(`Agent Thought: ${thoughtProcess.thoughts}`);
+                // No tool calls - AI is providing final response
+                if (message.content) {
+                    this.addLog(`✨ Agent: ${message.content}`);
 
-                // 2. ACT
-                const result = await this.executeTool(thoughtProcess.tool, thoughtProcess.args, session);
+                    // Add purely to history so it shows in chat
+                    session.history.push({
+                        role: 'assistant',
+                        content: message.content
+                    });
 
-                // 3. OBSERVE
-                session.history.push({
-                    role: 'assistant',
-                    content: JSON.stringify(thoughtProcess)
-                });
-                session.history.push({
-                    role: 'user',
-                    content: `Tool Output: ${JSON.stringify(result)}\n\n[Context] Current Working Directory: ${session.variables.workingDirectory}`
-                });
-
-                // Handle DONE or ASK_USER
-                if (thoughtProcess.tool === 'DONE') {
+                    this.updateSession(sessionId, {
+                        status: 'finished',
+                        finalMessage: message.content, // Used by UI to show final outcome
+                        completedAt: Date.now()
+                    });
                     session.status = 'finished';
-                    this.addLog("Agent: Task Completed.");
-                } else if (thoughtProcess.tool === 'ASK_USER') {
-                    // Don't update status here - executeTool already did it
-                    // Just log and exit the loop
-                    this.addLog(`Agent asks: ${thoughtProcess.args[0]}`);
-                    break; // Exit loop to wait for user input
+                    break;
                 }
 
+                // Edge case: no tools and no content
+                this.addLog('⚠️ AI returned empty response');
+                break;
+
             } catch (error) {
-                this.addLog(`Agent Error: ${error.message}`);
+                this.addLog(`❌ Error: ${error.message}`);
+                this.updateSession(sessionId, {
+                    status: 'error',
+                    error: error.message
+                });
                 session.status = 'error';
+                break;
             }
 
             this.updateUI();
         }
+
+        // Check if max steps reached
+        if (stepCount >= MAX_STEPS) {
+            this.addLog('⚠️ Max steps reached (50)');
+            this.updateSession(sessionId, {
+                status: 'max_steps_reached',
+                completedAt: Date.now()
+            });
+        }
+
+        this.updateUI();
     }
 
-    resumeWithUserInput(sessionId, userInput) {
-        const session = this.sessions.find(s => s.id === sessionId);
-        if (!session || session.status !== 'awaiting_user_input') {
-            this.addLog("Error: Cannot resume - session not found or not awaiting input");
+    /**
+     * Execute a tool and return the result
+     */
+    async executeTool(toolName, args, session) {
+        try {
+            switch (toolName) {
+                case 'read_file': {
+                    const content = await window.api.readFile(args.file_path);
+                    return {
+                        success: true,
+                        content: content,
+                        file_path: args.file_path
+                    };
+                }
+
+                case 'write_file': {
+                    // SAFETY CHECK: Ensure file exists before modifying
+                    // Try to read it first to verify existence and correct path
+                    // If it fails, it likely means the agent has the wrong path
+                    let fileExists = false;
+                    try {
+                        await window.api.readFile(args.file_path);
+                        fileExists = true;
+                    } catch (e) {
+                        fileExists = false;
+                    }
+
+                    if (!fileExists) {
+                        // Allow specific exception ONLY if it matches strict active file path (rare case of new file in correct place?)
+                        // But we want to BLOCK new files generally.
+                        // So if it doesn't exist, we reject it and tell the agent the correct path.
+
+                        // Suggest the correct path if we have one
+                        const suggestion = session.relativeActiveFilePath
+                            ? `Did you mean '${session.relativeActiveFilePath}'?`
+                            : "Please verify the path using list_directory first.";
+
+                        // Throwing error returns it to the agent so it can retry
+                        throw new Error(`File '${args.file_path}' does not exist. You are restricted to modifying EXISTING files only. ${suggestion}`);
+                    }
+
+                    await window.api.writeFile(args.file_path, args.content);
+
+                    // Refresh file explorer if loadFiles callback exists
+                    if (this.loadFiles && session.workspace) {
+                        this.loadFiles(session.workspace);
+                    }
+
+                    // Refresh active file editor if callback provided
+                    if (this.refreshActiveFile) {
+                        this.refreshActiveFile();
+                    }
+
+                    return {
+                        success: true,
+                        message: `File written successfully: ${args.file_path}`,
+                        file_path: args.file_path,
+                        bytes_written: args.content.length
+                    };
+                }
+
+                case 'list_directory': {
+                    const path = args.path || '.';
+                    const files = await window.api.readDir(path);
+                    return {
+                        success: true,
+                        path: path,
+                        files: files.map(f => ({
+                            name: f.name,
+                            type: f.isDirectory ? 'directory' : 'file',
+                            path: f.path
+                        }))
+                    };
+                }
+
+                case 'run_command': {
+                    const result = await window.api.executeCommand(
+                        'autonomous_term',
+                        args.command
+                    );
+                    return {
+                        success: result.success,
+                        command: args.command,
+                        stdout: result.stdout || '',
+                        stderr: result.stderr || '',
+                        exit_code: result.success ? 0 : 1
+                    };
+                }
+
+                case 'ask_user': {
+                    // Pause the agent and wait for user input
+                    session.status = 'awaiting_user_input';
+                    session.pendingQuestion = args.question;
+
+                    this.updateSession(session.id, {
+                        status: 'awaiting_user_input',
+                        pendingQuestion: args.question
+                    });
+
+                    return {
+                        success: true,
+                        message: 'Question sent to user. Waiting for response.',
+                        question: args.question
+                    };
+                }
+
+                default:
+                    return {
+                        success: false,
+                        error: `Unknown tool: ${toolName}`,
+                        available_tools: AGENT_TOOLS.map(t => t.function.name)
+                    };
+            }
+        } catch (error) {
+            return {
+                success: false,
+                error: error.message,
+                tool: toolName,
+                args: args
+            };
+        }
+    }
+
+    /**
+     * Resume a paused session with user's response
+     */
+    resumeSession(sessionId, userResponse) {
+        const session = this.sessions.get(sessionId);
+        if (!session) {
+            this.addLog(`Session ${sessionId} not found`);
             return;
         }
 
-        this.addLog(`User Response: ${userInput}`);
+        if (session.status !== 'awaiting_user_input') {
+            this.addLog(`Session ${sessionId} is not awaiting input (status: ${session.status})`);
+            return;
+        }
+
+        this.addLog(`👤 User response: ${userResponse}`);
 
         // Add user's response to history
         session.history.push({
             role: 'user',
-            content: `User Response: ${userInput}`
+            content: `User's answer to "${session.pendingQuestion}": ${userResponse}`
         });
 
         // Clear pending question and resume
-        session.pendingQuestion = null;
         session.status = 'running';
-        this.updateUI();
+        session.pendingQuestion = null;
+
+        this.updateSession(sessionId, {
+            status: 'running',
+            pendingQuestion: null
+        });
 
         // Resume the agent loop
-        this.runAppBuilderLoop(session);
+        this.runAgentLoop(sessionId).catch(err => {
+            this.addLog(`Agent resume error: ${err.message}`);
+            this.updateSession(sessionId, { status: 'error', error: err.message });
+        });
     }
 
-    parseResponse(text) {
-        try {
-            // Attempt to extract JSON if mixed with text
-            const jsonMatch = text.match(/\{[\s\S]*\}/);
-            const jsonStr = jsonMatch ? jsonMatch[0] : text;
-            return JSON.parse(jsonStr);
-        } catch (e) {
-            console.error("JSON Parse Error", e);
-            return null;
+    /**
+     * Stop a running session
+     */
+    stopSession(sessionId) {
+        const session = this.sessions.get(sessionId);
+        if (session) {
+            session.status = 'stopped';
+            this.updateSession(sessionId, {
+                status: 'stopped',
+                stoppedAt: Date.now()
+            });
+            this.addLog(`🛑 Session ${sessionId} stopped by user`);
         }
     }
 
-    async executeTool(toolName, args, session) {
-        try {
-            switch (toolName) {
-                case 'READ_FILE':
-                    return await window.api.readFile(args[0]);
-                case 'WRITE_FILE':
-                    // Resolve path relative to working directory if not absolute
-                    let filePath = args[0];
-                    if (!filePath.includes(':') && !filePath.startsWith('/')) {
-                        // Relative path - resolve against working directory
-                        const workingDir = session?.variables?.workingDirectory || '.';
-                        if (workingDir !== '.') {
-                            filePath = `${workingDir}/${filePath}`;
-                        }
-                    }
-                    await window.api.writeFile(filePath, args[1]);
-                    return `File written successfully to ${filePath}`;
-                case 'LIST_DIR':
-                    const files = await window.api.readDir(args[0] || '.');
-                    // Simplify output for LLM
-                    return files.map(f => f.name + (f.isDirectory ? '/' : '')).join('\n');
-                case 'RUN_COMMAND':
-                    const command = args[0];
-
-                    // CRITICAL: Detect project creation BEFORE executing command
-                    let isProjectCreation = false;
-                    let projectName = null;
-
-                    if (session && (command.includes('npm create') || command.includes('npx create'))) {
-                        this.addLog(`Agent: DEBUG - Detected project creation command: ${command}`);
-                        const match = command.match(/(?:npm create|npx create)[^\s]+\s+([^\s-]+)/);
-                        this.addLog(`Agent: DEBUG - Regex match result: ${match ? match[1] : 'NO MATCH'}`);
-
-                        if (match && match[1]) {
-                            isProjectCreation = true;
-                            projectName = match[1];
-                            this.addLog(`Agent: DEBUG - Will set CWD to: ${projectName} after command completes`);
-                        }
-                    }
-
-                    // Execute the command
-                    const cmdResult = await window.api.executeCommand('autonomous_term', command);
-
-                    // CRITICAL: Wait for project creation to complete, then set CWD
-                    if (isProjectCreation && projectName) {
-                        try {
-                            // Wait for npm create to finish (it runs in background)
-                            this.addLog(`Agent: DEBUG - Waiting 3 seconds for project creation to complete...`);
-                            await new Promise(resolve => setTimeout(resolve, 3000));
-
-                            const workspace = await window.api.getWorkspacePath();
-                            this.addLog(`Agent: DEBUG - Workspace path: ${workspace}`);
-
-                            const projectPath = `${workspace}\\${projectName}`;
-                            this.addLog(`Agent: DEBUG - Full project path: ${projectPath}`);
-
-                            // Update session working directory
-                            session.variables.workingDirectory = projectName;
-                            this.addLog(`Agent: Working directory updated to: ${projectName}`);
-
-                            // CRITICAL: Update the actual terminal CWD so commands run in the right place
-                            const cwdResult = await window.api.setTerminalCwd('autonomous_term', projectPath);
-                            this.addLog(`Agent: Terminal CWD set to: ${projectPath}`);
-                            this.addLog(`Agent: DEBUG - setTerminalCwd result: ${JSON.stringify(cwdResult)}`);
-                        } catch (error) {
-                            this.addLog(`Agent: ERROR setting terminal CWD: ${error.message}`);
-                            console.error('Terminal CWD error:', error);
-                        }
-                    }
-                    // Track explicit cd commands
-                    else if (session && command.trim().startsWith('cd ')) {
-                        const newDir = command.trim().substring(3).trim();
-                        if (newDir) {
-                            session.variables.workingDirectory = newDir;
-                            this.addLog(`Agent: Working directory changed to: ${newDir}`);
-                        }
-                    }
-
-                    return cmdResult.success ? cmdResult.stdout : `Error: ${cmdResult.stderr}`;
-                case 'ASK_USER':
-                    session.status = 'awaiting_user_input';
-                    session.pendingQuestion = args[0]; // Store the question for UI
-                    this.updateUI();
-                    return `Waiting for user response to: "${args[0]}"`;
-                case 'DONE':
-                    return "Success";
-                default:
-                    return `Unknown tool: ${toolName}`;
-            }
-        } catch (e) {
-            return `Tool Execution Error: ${e.message}`;
-        }
+    /**
+     * Get session data
+     */
+    getSession(sessionId) {
+        return this.sessions.get(sessionId);
     }
 
-    // Keep legacy method signature to avoid breaking App.js immediately, 
-    // but redirect logic or warn if necessary.
-    // For now, let's allow the old "createProposal" to exist for the "Plan" button if it exists,
-    // but we can also add a bridge.
+    /**
+     * Delete a session
+     */
+    deleteSession(sessionId) {
+        this.sessions.delete(sessionId);
+    }
 
-    async createProposal(goal) {
-        // Redirect to new autonomous flow?
-        // Or keep parallel? Let's keep existing logic just in case, 
-        // but maybe we can just start the autonomous session here if that's what we want.
-        // The prompt asked to "make anita exactly like Emergent AI" which implies replacing the old flow.
-        // Let's TRY to use the new flow.
-
-        return this.startAutonomousSession(goal);
+    /**
+     * Get language identifier for a file based on extension
+     */
+    getLanguageForFile(fileName) {
+        const ext = fileName.split('.').pop().toLowerCase();
+        const languageMap = {
+            'js': 'javascript',
+            'jsx': 'javascript',
+            'ts': 'typescript',
+            'tsx': 'typescript',
+            'py': 'python',
+            'java': 'java',
+            'cpp': 'cpp',
+            'c': 'c',
+            'cs': 'csharp',
+            'go': 'go',
+            'rs': 'rust',
+            'php': 'php',
+            'rb': 'ruby',
+            'swift': 'swift',
+            'kt': 'kotlin',
+            'html': 'html',
+            'css': 'css',
+            'scss': 'scss',
+            'json': 'json',
+            'xml': 'xml',
+            'md': 'markdown',
+            'sh': 'bash',
+            'yaml': 'yaml',
+            'yml': 'yaml'
+        };
+        return languageMap[ext] || 'plaintext';
     }
 }

@@ -1,0 +1,479 @@
+/* Project Wizard Modal Styles */
+
+.project-wizard-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+    animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+.project-wizard-modal {
+    background: linear-gradient(145deg, rgba(30, 32, 40, 0.98), rgba(20, 22, 28, 0.98));
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    width: 90%;
+    max-width: 700px;
+    max-height: 85vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 25px 80px rgba(0, 0, 0, 0.5), 0 0 1px rgba(255, 255, 255, 0.1);
+    animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px) scale(0.98);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+.project-wizard-header {
+    padding: 20px 24px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.project-wizard-header h2 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.project-wizard-header h2 i {
+    color: #a78bfa;
+}
+
+.project-wizard-close {
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.5);
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 6px;
+    transition: all 0.2s;
+}
+
+.project-wizard-close:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+}
+
+.project-wizard-content {
+    padding: 24px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.project-wizard-section {
+    margin-bottom: 24px;
+}
+
+.project-wizard-section label {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.7);
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.project-name-input {
+    width: 100%;
+    padding: 12px 16px;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    color: #fff;
+    font-size: 15px;
+    font-family: inherit;
+    transition: all 0.2s;
+}
+
+.project-name-input:focus {
+    outline: none;
+    border-color: #a78bfa;
+    box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.15);
+}
+
+.project-name-input::placeholder {
+    color: rgba(255, 255, 255, 0.3);
+}
+
+/* Framework Grid */
+.framework-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 12px;
+}
+
+.framework-card {
+    background: rgba(0, 0, 0, 0.25);
+    border: 2px solid transparent;
+    border-radius: 12px;
+    padding: 16px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 10px;
+}
+
+.framework-card:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.15);
+    transform: translateY(-2px);
+}
+
+.framework-card.selected {
+    background: rgba(167, 139, 250, 0.1);
+    border-color: #a78bfa;
+    box-shadow: 0 0 20px rgba(167, 139, 250, 0.2);
+}
+
+.framework-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    transition: transform 0.2s;
+}
+
+.framework-card:hover .framework-icon {
+    transform: scale(1.1);
+}
+
+.framework-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: #fff;
+}
+
+.framework-desc {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.5);
+    line-height: 1.4;
+}
+
+/* Project Wizard Footer */
+.project-wizard-footer {
+    padding: 16px 24px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    background: rgba(0, 0, 0, 0.2);
+}
+
+.wizard-btn {
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    border: none;
+    font-family: inherit;
+}
+
+.wizard-btn-secondary {
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.wizard-btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.12);
+    color: #fff;
+}
+
+.wizard-btn-primary {
+    background: linear-gradient(135deg, #a78bfa, #8b5cf6);
+    color: #fff;
+    box-shadow: 0 4px 15px rgba(139, 92, 246, 0.3);
+}
+
+.wizard-btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(139, 92, 246, 0.4);
+}
+
+.wizard-btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+}
+
+/* Getting Started Tab Styles */
+.getting-started-container {
+    padding: 32px;
+    max-width: 800px;
+    margin: 0 auto;
+    color: #e4e4e7;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.getting-started-header {
+    text-align: center;
+    margin-bottom: 40px;
+}
+
+.getting-started-header h1 {
+    font-size: 28px;
+    font-weight: 700;
+    margin: 0 0 8px 0;
+    background: linear-gradient(135deg, #fff, #a78bfa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.getting-started-header p {
+    color: rgba(255, 255, 255, 0.5);
+    margin: 0;
+    font-size: 14px;
+}
+
+.getting-started-framework {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.getting-started-framework .framework-badge {
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Steps List */
+.setup-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.setup-step {
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 20px;
+    transition: all 0.2s;
+}
+
+.setup-step:hover {
+    border-color: rgba(255, 255, 255, 0.15);
+}
+
+.setup-step-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.step-number {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #a78bfa, #8b5cf6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 700;
+    color: #fff;
+    flex-shrink: 0;
+}
+
+.setup-step h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: #fff;
+}
+
+.setup-step-content {
+    margin-left: 40px;
+}
+
+.setup-step-content p {
+    margin: 0 0 12px 0;
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.step-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: #a78bfa;
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 500;
+    transition: color 0.2s;
+}
+
+.step-link:hover {
+    color: #c4b5fd;
+    text-decoration: underline;
+}
+
+.step-command {
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-family: 'Fira Code', 'Consolas', monospace;
+    font-size: 13px;
+    color: #4ade80;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.step-command code {
+    flex: 1;
+}
+
+.copy-command-btn {
+    background: rgba(255, 255, 255, 0.1);
+    border: none;
+    border-radius: 6px;
+    padding: 6px 10px;
+    color: rgba(255, 255, 255, 0.6);
+    cursor: pointer;
+    font-size: 11px;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.copy-command-btn:hover {
+    background: rgba(255, 255, 255, 0.15);
+    color: #fff;
+}
+
+.env-steps {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.env-steps li {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 13px;
+    padding-left: 20px;
+    position: relative;
+}
+
+.env-steps li::before {
+    content: '→';
+    position: absolute;
+    left: 0;
+    color: #a78bfa;
+}
+
+/* File Chat Indicator */
+.file-chat-indicator {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 6px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.file-chat-indicator i {
+    font-size: 12px;
+}
+
+.file-chat-indicator .file-name {
+    color: #a78bfa;
+    font-weight: 500;
+}
+
+/* Chat scope banner */
+.chat-scope-banner {
+    padding: 10px 16px;
+    background: linear-gradient(90deg, rgba(167, 139, 250, 0.1), transparent);
+    border-bottom: 1px solid rgba(167, 139, 250, 0.2);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.chat-scope-banner i {
+    color: #a78bfa;
+}
+
+.chat-scope-banner .scope-file {
+    color: #fff;
+    font-weight: 500;
+}
+
+/* File-scoped chat tab indicator */
+.chat-tab.file-scoped {
+    border-left: 2px solid #a78bfa;
+    background: linear-gradient(90deg, rgba(167, 139, 250, 0.08), transparent);
+}
+
+.chat-tab.file-scoped:hover {
+    background: linear-gradient(90deg, rgba(167, 139, 250, 0.15), rgba(255, 255, 255, 0.05));
+}
+
+.chat-tab.file-scoped.active {
+    background: linear-gradient(90deg, rgba(167, 139, 250, 0.2), rgba(255, 255, 255, 0.08));
+    border-left-color: #c4b5fd;
+}

@@ -5,22 +5,31 @@ export class AIService {
         this.baseUrl = "https://openrouter.ai/api/v1";
     }
 
-    async chat(messages, onStream, signal = null, overrideModel = null) {
+    async chat(messages, onStream, signal = null, overrideModel = null, tools = null) {
         const response = await fetch(`${this.baseUrl}/chat/completions`, {
             method: "POST",
             headers: {
                 "Authorization": `Bearer ${this.apiKey}`,
                 "Content-Type": "application/json",
-                "HTTP-Referer": "https://github.com/kakaiking/anita", // Optional
+                "HTTP-Referer": "https://github.com/kakaiking/anita",
                 "X-Title": "Anita IDE"
             },
             body: JSON.stringify({
                 model: overrideModel || this.model,
                 messages: messages,
-                stream: !!onStream
+                stream: !!onStream,
+                tools: tools,                           // Add tools support
+                tool_choice: tools ? "auto" : undefined // Let AI decide when to use tools
             }),
             signal: signal
         });
+
+        // Handle API errors
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            const errorMessage = errorData.error?.message || errorData.message || `API Error: ${response.status} ${response.statusText}`;
+            throw new Error(errorMessage);
+        }
 
         if (onStream) {
             const reader = response.body.getReader();
@@ -56,6 +65,12 @@ export class AIService {
             const data = await response.json();
             if (data.usage) {
                 window.api.updateTokenUsage(data.usage.total_tokens);
+            }
+
+            // Return full response when tools are used (to access tool_calls)
+            // Return just content for regular chat (backward compatible)
+            if (tools) {
+                return data;
             }
             return data.choices[0].message.content;
         }

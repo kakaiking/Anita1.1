@@ -33,7 +33,18 @@ function startWatcher(targetPath) {
     try {
         console.log(`Starting file watcher on: ${targetPath}`);
         fileWatcher = fs.watch(targetPath, { recursive: true }, (eventType, filename) => {
-            if (filename && (filename.includes('node_modules') || filename.includes('.git'))) return;
+            if (!filename || filename.includes('node_modules') || filename.includes('.git')) return;
+
+            // Filter out directory access events (which happen when expanding folders in explorer)
+            // Only trigger on actual changes: 'rename' (create/delete) or 'change' on files
+            const fullPath = path.join(targetPath, filename);
+
+            // For 'rename' events (create/delete), always notify
+            // For 'change' events, only notify if it's a file (not a directory being accessed)
+            const shouldNotify = eventType === 'rename' ||
+                (eventType === 'change' && fs.existsSync(fullPath) && !fs.statSync(fullPath).isDirectory());
+
+            if (!shouldNotify) return;
 
             // Debounce to prevent flooding
             if (watcherDebounceTimer) clearTimeout(watcherDebounceTimer);
@@ -71,6 +82,13 @@ function createWindow() {
     });
 
     mainWindow.loadFile('index.html');
+
+    // Enable F12 to open DevTools for debugging
+    mainWindow.webContents.on('before-input-event', (event, input) => {
+        if (input.key === 'F12' && input.type === 'keyDown') {
+            mainWindow.webContents.toggleDevTools();
+        }
+    });
 
     mainWindow.once('ready-to-show', () => {
         mainWindow.show();
@@ -501,6 +519,16 @@ ipcMain.handle('get-open-chat-ids', () => {
 
 ipcMain.handle('save-open-chat-ids', (event, ids) => {
     store.set('openChatIds', ids);
+    return true;
+});
+
+// Editor State (Unsaved Changes)
+ipcMain.handle('get-editor-state', () => {
+    return store.get('editorState', null);
+});
+
+ipcMain.handle('save-editor-state', (event, state) => {
+    store.set('editorState', state);
     return true;
 });
 
