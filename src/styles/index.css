@@ -675,8 +675,8 @@ body {
 }
 
 .breadcrumb-separator {
-  margin: 0 2px;
-  opacity: 0.3;
+  margin: 0 4px;
+  opacity: 0.6;
 }
 
 .breadcrumb-file {

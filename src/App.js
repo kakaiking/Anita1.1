@@ -42,6 +42,8 @@ const ShieldCheck = 'shield-check';
 const Users = 'users';
 const Eye = 'eye';
 const Monitor = 'monitor';
+const ImageIcon = 'image';
+const XCircle = 'x-circle';
 
 const getFileIcon = (name) => {
     const lowerName = name.toLowerCase();
@@ -125,7 +127,7 @@ const Breadcrumbs = ({ activeFile, workspace }) => {
             {parts.map((part, i) => (
                 <React.Fragment key={i}>
                     <span className="breadcrumb-part">{part}</span>
-                    <Icon name={ChevronRight} size={10} className="breadcrumb-separator" />
+                    <Icon name={ChevronRight} size={14} className="breadcrumb-separator" />
                 </React.Fragment>
             ))}
             <span className="breadcrumb-file">{fileName}</span>
@@ -677,9 +679,20 @@ class AIService {
                         messages,
                         model: activeModel,
                         stream: !!onStream,
-                        requestId
+                        requestId,
+                        tools: tools,                           // Add tools support
+                        tool_choice: tools ? "auto" : undefined // Let AI decide when to use tools
                     });
-                    if (!onStream) resolve(res.choices[0].message.content);
+
+                    if (!onStream) {
+                        // Return full response when tools are used (to access tool_calls)
+                        if (tools) {
+                            resolve(res);
+                        } else {
+                            // Return just content for regular chat (backward compatible)
+                            resolve(res.choices[0].message.content);
+                        }
+                    }
                 } catch (err) {
                     cleanupChunk();
                     cleanupDone();
@@ -704,79 +717,110 @@ class AIService {
         const finalMessages = messages; // Direct pass-through
 
 
-        try {
-            const response = await fetch(`${baseUrl}/chat/completions`, {
-                method: "POST",
-                signal,
-                headers: {
-                    "Authorization": `Bearer ${apiKey}`,
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://github.com/kakaiking/anita",
-                    "X-Title": "Anita IDE"
-                },
-                body: JSON.stringify({
-                    model: model,
-                    messages: finalMessages,
-                    stream: !!onStream,
-                    max_tokens: 8192,
-                    tools: tools,                           // Add tools support
-                    tool_choice: tools ? "auto" : undefined // Let AI decide when to use tools
-                })
-            });
+        const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+        const MAX_RETRIES = 3;
+        const BASE_DELAY = 2000; // Start with 2 seconds
 
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({}));
-                const errorMessage = errorData.error?.message || errorData.message || `HTTP ${response.status}`;
-
-                // Log full error for debugging
-                console.error('Provider Error Details:', {
-                    status: response.status,
-                    statusText: response.statusText,
-                    errorData,
-                    model,
-                    baseUrl
+        for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                const response = await fetch(`${baseUrl}/chat/completions`, {
+                    method: "POST",
+                    signal,
+                    headers: {
+                        "Authorization": `Bearer ${apiKey}`,
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "https://github.com/kakaiking/anita",
+                        "X-Title": "Anita IDE"
+                    },
+                    body: JSON.stringify({
+                        model: model,
+                        messages: finalMessages,
+                        stream: !!onStream,
+                        max_tokens: 2048, // Reduced to work with low credit balances
+                        tools: tools,                           // Add tools support
+                        tool_choice: tools ? "auto" : undefined // Let AI decide when to use tools
+                    })
                 });
 
-                // Provide user-friendly error messages based on status code
-                if (response.status === 401) {
-                    const providerName = baseUrl.includes('openrouter') ? 'OpenRouter' : 'Together AI';
-                    const keyUrl = baseUrl.includes('openrouter')
-                        ? 'https://openrouter.ai/keys'
-                        : 'https://api.together.xyz/settings/api-keys';
-                    throw new Error(`Authentication failed: Invalid ${providerName} API key.\n\n⚠️ Note: This app uses ${providerName}, not OpenAI directly.\nGet your ${providerName} API key from: ${keyUrl}`);
-                } else if (response.status === 403) {
-                    throw new Error(`Access forbidden: Your API key may not have access to this model (${model}).\n\nTry selecting a different model in Settings.`);
-                } else if (response.status === 429) {
-                    throw new Error(`Rate limit exceeded: Too many requests. Please wait a moment and try again.`);
-                } else if (response.status >= 500) {
-                    throw new Error(`Provider server error (${response.status}): The AI service is experiencing issues. Please try again later.`);
-                } else {
-                    throw new Error(`Provider error (${response.status}): ${errorMessage}\n\nFull error: ${JSON.stringify(errorData)}`);
+                if (response.status === 429 || response.status >= 500) {
+                    if (attempt < MAX_RETRIES) {
+                        const delay = BASE_DELAY * Math.pow(2, attempt); // 2s, 4s, 8s
+                        console.warn(`Request failed (${response.status}). Retrying in ${delay / 1000}s... (Attempt ${attempt + 1}/${MAX_RETRIES})`);
+                        if (onStream) {
+                            // Notify stream of wait status if possible, otherwise just wait
+                            onStream({ content: "", reasoning: "", fullText: "", fullReasoning: "", status: "waiting_retry" });
+                        }
+                        await sleep(delay);
+                        continue;
+                    }
                 }
-            }
 
-            if (onStream) {
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    const errorMessage = errorData.error?.message || errorData.message || `HTTP ${response.status}`;
+
+                    // Log full error for debugging
+                    console.error('Provider Error Details:', {
+                        status: response.status,
+                        statusText: response.statusText,
+                        errorData,
+                        model,
+                        baseUrl
+                    });
+
+                    if (response.status === 402) {
+                        throw new Error(`Provider error (402): ${errorMessage}`);
+                    }
+                    if (response.status === 404) {
+                        throw new Error(`Provider error (404): ${errorMessage}`);
+                    }
+                    if (response.status === 401) {
+                        throw new Error(`Provider error (401): Invalid API key. Please check your settings.`);
+                    }
+
+                    throw new Error(`Provider error (${response.status}): ${errorMessage}`);
+                }
+
+                // If successful return response immediately
+                if (!response.body) throw new Error("No response body received");
+
+                if (!onStream) {
+                    const data = await response.json();
+
+                    // Return full response when tools are used (to access tool_calls)
+                    if (tools) {
+                        return data;
+                    }
+
+                    // Return just content for regular chat (backward compatible)
+                    if (data.choices && data.choices.length > 0) {
+                        return data.choices[0].message.content;
+                    }
+
+                    return null;
+                }
+
+                // Streaming handling
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
+                let buffer = "";
                 let fullText = "";
                 let fullReasoning = "";
 
-                let partialLine = "";
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
 
-                    const chunk = decoder.decode(value, { stream: true });
-                    const text = partialLine + chunk;
-                    const lines = text.split("\n");
-                    partialLine = lines.pop();
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split("\n");
+                    buffer = lines.pop();
 
                     for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (!trimmed || trimmed === "data: [DONE]") continue;
                         if (line.startsWith("data: ")) {
-                            const data = line.slice(6).trim();
-                            if (data === "[DONE]") continue;
                             try {
-                                const json = JSON.parse(data);
+                                const json = JSON.parse(line.slice(6));
                                 const delta = json.choices[0]?.delta;
                                 const content = delta?.content || "";
                                 const reasoning = delta?.reasoning_content || "";
@@ -787,31 +831,24 @@ class AIService {
                                     onStream({ content, reasoning, fullText, fullReasoning });
                                 }
                             } catch (e) {
-                                console.warn("Error parsing stream chunk", e);
+                                console.error("Error parsing stream chunk", e);
                             }
                         }
                     }
                 }
                 return fullText;
-            } else {
-                const data = await response.json();
-                if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
-                if (!data.choices || data.choices.length === 0) throw new Error("No response from AI.");
+            } catch (err) {
+                // If it's an abort error, throw immediately, don't retry
+                if (err.name === 'AbortError') throw err;
 
-                if (data.usage) {
-                    window.api.updateTokenUsage(data.usage.total_tokens);
-                }
+                // If it's the last attempt, or it's a non-retryable error, throw it
+                if (attempt === MAX_RETRIES) throw err;
 
-                // Return full response when tools are used (to access tool_calls)
-                // Return just content for regular chat (backward compatible)
-                if (tools) {
-                    return data;
-                }
-                return data.choices[0].message.content;
+                // For network errors during fetch itself (not response errors), retry
+                console.warn(`Network error on attempt ${attempt + 1}. Retrying...`, err.message);
+                await sleep(BASE_DELAY * Math.pow(2, attempt));
+                continue;
             }
-        } catch (err) {
-            console.error(err);
-            throw err;
         }
     }
 }
@@ -1264,6 +1301,41 @@ const App = () => {
     const [activeTerminalId, setActiveTerminalId] = useState('t1');
     const [composerMode, setComposerMode] = useState('chat');
 
+    // Image Upload State
+    const [selectedImage, setSelectedImage] = useState(null);
+    const [imageModal, setImageModal] = useState(null); // URL of image to show in modal
+    const fileInputRef = useRef(null);
+
+    const handleImageSelect = (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                setSelectedImage(event.target.result);
+            };
+            reader.readAsDataURL(file);
+        }
+        // Reset input so same file can be selected again if needed
+        e.target.value = '';
+    };
+
+    const handleRemoveImage = () => {
+        setSelectedImage(null);
+    };
+
+    const handleUploadClick = () => {
+        const currentModel = settings.model.toLowerCase();
+        // Models known to support vision
+        const visionKeywords = ['claude-3', 'gpt-4o', 'gemini', 'vision', 'llava', 'pixtral', 'llama-3.2-90b-vision', 'llama-4-scout', 'qwen2-vl'];
+        const isVisionSupported = visionKeywords.some(keyword => currentModel.includes(keyword.toLowerCase()));
+
+        if (!isVisionSupported) {
+            alert(`The current model (${settings.model}) does not support image upload.\n\nPlease switch to a vision-capable model in Settings, such as:\n• Together AI: Llama 4 Scout (meta-llama/Llama-4-Scout-17B-16E-Instruct)\n• Google Gemini Pro Vision\n• Anthropic Claude 3.5 Sonnet\n• GPT-4o`);
+            return;
+        }
+        fileInputRef.current?.click();
+    };
+
     // @-Mention Autocomplete State
     const [previewFile, setPreviewFile] = useState(null);
     const [hoveredTab, setHoveredTab] = useState(null);
@@ -1391,6 +1463,16 @@ const App = () => {
             try {
                 agentManagerRef.current = new window.AgentManager(ai, {
                     addLog: (msg) => addLog(null, msg),
+                    addMessage: (chatId, message) => {
+                        // Add message to chat
+                        setChats(prev => prev.map(c =>
+                            c.id === chatId ? {
+                                ...c,
+                                messages: [...c.messages, message],
+                                lastUpdatedAt: Date.now()
+                            } : c
+                        ));
+                    },
                     updateUI: () => setChats(prev => [...prev]),
                     updateSession: (sessionId, updates) => {
                         setChats(prev => prev.map(c => ({
@@ -2650,7 +2732,7 @@ const App = () => {
     };
 
     // NEW: Agent handler using function calling
-    const handleStartAgentWithFunctionCalling = async (goal) => {
+    const handleStartAgentWithFunctionCalling = async (goal, image = null) => {
         if (!workspace) {
             addLog(null, "Please select a workspace first.", "error");
             return;
@@ -2716,7 +2798,9 @@ const App = () => {
             enhancedGoal,
             targetChatId,
             workspace,
-            activeFile  // Pass active file for file-scoped context
+            activeFile,  // Pass active file for file-scoped context
+            image,       // Pass image if available
+            settings     // Pass settings for vision/coding model split
         );
 
         // Add session to chat
@@ -2974,7 +3058,7 @@ const App = () => {
 
     const handleSubmitProposal = async () => {
         if (isPlanning || isAgentExecuting) return handleStop();
-        if (!composerInput.trim()) return;
+        if (!composerInput.trim() && !selectedImage) return; // Allow image-only or text-only
         if (!workspace) {
             addLog(null, "Please select a workspace first.", "error");
             return;
@@ -2983,6 +3067,9 @@ const App = () => {
 
         const goal = composerInput;
         setComposerInput('');
+        const currentImage = selectedImage; // Capture current image
+        setSelectedImage(null); // Clear state immediately
+
         const targetChatId = activeChatId;
 
         updateChat(targetChatId, {
@@ -2994,10 +3081,19 @@ const App = () => {
         abortControllersRef.current[targetChatId] = currentController;
         const signal = currentController.signal;
 
+        // Construct Content: String for text-only, Array for multi-modal
+        let messageContent = goal;
+        if (currentImage) {
+            messageContent = [
+                { type: "text", text: goal },
+                { type: "image_url", image_url: { url: currentImage } }
+            ];
+        }
+
         const userMsg = {
             id: 'u-' + Date.now(),
             role: 'user',
-            content: goal,
+            content: messageContent,
             timestamp: new Date().toLocaleTimeString()
         };
 
@@ -3041,7 +3137,7 @@ const App = () => {
                 if (intentMode === AGENT_MODES.AUTONOMOUS) {
                     addLog(null, "Starting Agent with Function Calling...");
                     // Use new function calling agent
-                    await handleStartAgentWithFunctionCalling(goal);
+                    await handleStartAgentWithFunctionCalling(goal, currentImage);
                     return;
                 }
 
@@ -4008,8 +4104,6 @@ Respond ONLY with JSON:
                             onCreateItem={onCreateItem}
                             renamingItem={renamingItem}
                             setRenamingItem={setRenamingItem}
-                            renamingItem={renamingItem}
-                            setRenamingItem={setRenamingItem}
                             onRenameItem={onRenameItem}
                             onDeleteItem={onDeleteItem}
                         />
@@ -4703,7 +4797,20 @@ Respond ONLY with JSON:
                                                         </div>
                                                     ) : (
                                                         <div className="user-message-flow">
-                                                            <span>{m.content}</span>
+                                                            <span>
+                                                                {Array.isArray(m.content)
+                                                                    ? m.content.find(c => c.type === 'text')?.text || ''
+                                                                    : m.content}
+                                                            </span>
+                                                            {Array.isArray(m.content) && m.content.some(c => c.type === 'image_url') && (
+                                                                <div style={{ marginTop: 8, maxWidth: '200px', borderRadius: 8, overflow: 'hidden' }}>
+                                                                    <img
+                                                                        src={m.content.find(c => c.type === 'image_url').image_url.url}
+                                                                        alt="Uploaded"
+                                                                        style={{ width: '100%', height: 'auto', display: 'block' }}
+                                                                    />
+                                                                </div>
+                                                            )}
                                                             <span className="message-time">{m.timestamp}</span>
                                                         </div>
                                                     )}
@@ -4736,6 +4843,46 @@ Respond ONLY with JSON:
 
                     <div className="composer-area">
                         <ChatStatus status={aiStatus} />
+                        {selectedImage && (
+                            <div className="image-preview-container" style={{ marginBottom: 12, padding: '0 4px', display: 'flex', alignItems: 'center' }}>
+                                <div style={{ position: 'relative', display: 'inline-block' }}>
+                                    <img
+                                        src={selectedImage}
+                                        alt="Upload preview"
+                                        onClick={() => setImageModal(selectedImage)} // Open modal on click
+                                        style={{
+                                            width: '60px',
+                                            height: '60px',
+                                            borderRadius: '10px',
+                                            border: '1px solid var(--border-color)',
+                                            objectFit: 'cover',
+                                            cursor: 'pointer'
+                                        }}
+                                    />
+                                    <button
+                                        onClick={handleRemoveImage}
+                                        style={{
+                                            position: 'absolute',
+                                            top: -6,
+                                            right: -6,
+                                            background: 'var(--bg-primary)',
+                                            border: '1px solid var(--border-color)',
+                                            borderRadius: '50%',
+                                            width: 18,
+                                            height: 18,
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            cursor: 'pointer',
+                                            color: 'var(--text-primary)',
+                                            zIndex: 10
+                                        }}
+                                    >
+                                        <Icon name={X} size={10} />
+                                    </button>
+                                </div>
+                            </div>
+                        )}
                         <div className={`composer-wrapper ${composerInput ? 'has-text' : ''}`}>
                             {mentionQuery && (
                                 <MentionAutocomplete
@@ -4810,7 +4957,15 @@ Respond ONLY with JSON:
                                     }
                                 }}
                             />
+
                             <div className="composer-actions">
+                                <input
+                                    type="file"
+                                    ref={fileInputRef}
+                                    style={{ display: 'none' }}
+                                    accept="image/*"
+                                    onChange={handleImageSelect}
+                                />
                                 {!composerInput && (
                                     <div className="composer-mode-container">
                                         <CustomSelect
@@ -4833,6 +4988,16 @@ Respond ONLY with JSON:
                                         />
                                     </div>
                                 )}
+                                <div style={{ flex: 1 }}></div>
+
+                                <button
+                                    className="icon-btn"
+                                    onClick={handleUploadClick}
+                                    title="Upload Image"
+                                    style={{ marginRight: 8, padding: 6, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', background: 'transparent', border: 'none', color: 'var(--text-secondary)' }}
+                                >
+                                    <Icon name={ImageIcon} size={18} />
+                                </button>
                                 <button className="send-btn" onClick={handleSubmitProposal}>
                                     {(isPlanning || isAgentExecuting) ? <Icon name={Square} size={14} fill="currentColor" /> : <Icon name={Send} size={16} />}
                                 </button>
@@ -4889,20 +5054,50 @@ Respond ONLY with JSON:
                                             />
                                         </div>
                                         <div className="field" style={{ width: '100%' }}>
-                                            <label>Coding Model</label>
+                                            <label>Together AI API Key</label>
+                                            <input
+                                                type="password"
+                                                placeholder="Together AI API key..."
+                                                className="input"
+                                                value={settings.togetherKey}
+                                                onChange={(e) => setSettings({ ...settings, togetherKey: e.target.value })}
+                                            />
+                                        </div>
+                                        <div className="field" style={{ width: '100%' }}>
+                                            <label>Vision Model</label>
+                                            <select
+                                                className="input"
+                                                value={settings.visionModel || 'together/meta-llama/Llama-4-Scout-17B-16E-Instruct'}
+                                                onChange={(e) => setSettings({ ...settings, visionModel: e.target.value })}
+                                            >
+                                                <option value="together/meta-llama/Llama-4-Scout-17B-16E-Instruct">Llama 4 Scout (Together.ai) - Recommended</option>
+                                                <option value="openai/gpt-4o">GPT-4o (Vision)</option>
+                                                <option value="anthropic/claude-3-5-sonnet-20241022">Claude 3.5 Sonnet (Vision)</option>
+                                                <option value="google/gemini-pro-vision">Gemini Pro Vision</option>
+                                            </select>
+                                            <small style={{ fontSize: '11px', opacity: 0.6, display: 'block', marginTop: '4px' }}>
+                                                Used by agents to analyze images before execution
+                                            </small>
+                                        </div>
+                                        <div className="field" style={{ width: '100%' }}>
+                                            <label>Coding Model (Agent & Chat)</label>
                                             <select
                                                 className="input"
                                                 value={settings.model}
                                                 onChange={(e) => setSettings({ ...settings, model: e.target.value })}
                                             >
-                                                <option value="deepseek/deepseek-chat">DeepSeek Chat (Preferred)</option>
+                                                <option value="deepseek/deepseek-chat">DeepSeek Chat (Recommended for Agents)</option>
                                                 <option value="deepseek/deepseek-coder">DeepSeek Coder</option>
+                                                <option value="openai/gpt-4o">GPT-4o</option>
+                                                <option value="anthropic/claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>
+                                                <option value="mistralai/mistral-7b-instruct:free">Mistral 7B (Free)</option>
                                                 <option value="xiaomi/mimo-v2-flash:free">MiMo-V2 Flash (Xiaomi - Free)</option>
                                                 <option value="mistralai/devstral-2512:free">Devstral 2 2512 (Mistral - Free)</option>
                                                 <option value="kwaipilot/kat-coder-pro:free">KAT-Coder-Pro V1 (Kwai - Free)</option>
-                                                <option value="google/gemini-flash-1.5-8b">Gemini Flash 1.5</option>
-                                                <option value="mistralai/mistral-7b-instruct:free">Mistral 7B (Free)</option>
                                             </select>
+                                            <small style={{ fontSize: '11px', opacity: 0.6, display: 'block', marginTop: '4px' }}>
+                                                Used for chat and agent execution with function calling
+                                            </small>
                                         </div>
                                         <div className="modal-actions" style={{ display: 'flex', gap: 12, justifyContent: 'center', marginTop: 32, width: '100%' }}>
                                             <button className="btn btn-primary" style={{ padding: '12px 48px' }} onClick={async () => {

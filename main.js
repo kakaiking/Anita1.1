@@ -139,6 +139,7 @@ ipcMain.handle('get-settings', () => {
         apiKey: store.get('apiKey'),
         theme: store.get('theme', 'dark'),
         model: store.get('model', 'deepseek/deepseek-chat'),
+        visionModel: store.get('visionModel', 'together/meta-llama/Llama-4-Scout-17B-16E-Instruct'),
         userBubbleColor: store.get('userBubbleColor'),
         aiBubbleColor: store.get('aiBubbleColor'),
         userTextColor: store.get('userTextColor'),
@@ -156,6 +157,7 @@ ipcMain.handle('save-settings', (event, settings) => {
     if (settings.apiKey !== undefined) store.set('apiKey', settings.apiKey);
     if (settings.theme !== undefined) store.set('theme', settings.theme);
     if (settings.model !== undefined) store.set('model', settings.model);
+    if (settings.visionModel !== undefined) store.set('visionModel', settings.visionModel);
     if (settings.userBubbleColor !== undefined) store.set('userBubbleColor', settings.userBubbleColor);
     if (settings.aiBubbleColor !== undefined) store.set('aiBubbleColor', settings.aiBubbleColor);
     if (settings.userTextColor !== undefined) store.set('userTextColor', settings.userTextColor);
@@ -562,7 +564,7 @@ ipcMain.handle('abort-together-chat', (event, requestId) => {
 });
 
 // Together AI Proxy with Retry Logic
-ipcMain.handle('together-proxy-chat', async (event, { messages, model, stream, requestId }) => {
+ipcMain.handle('together-proxy-chat', async (event, { messages, model, stream, requestId, tools, tool_choice }) => {
     const fetchWithRetry = async (url, options, retries = 3, backoff = 1000) => {
         try {
             const response = await fetch(url, options);
@@ -609,17 +611,26 @@ ipcMain.handle('together-proxy-chat', async (event, { messages, model, stream, r
             throw new Error("Together AI key missing. Please provide one in settings.");
         }
 
+        // Build request body with optional tools support
+        const requestBody = {
+            model: model.replace('together/', ''),
+            messages,
+            stream: !!stream
+        };
+
+        // Add tools if provided
+        if (tools) {
+            requestBody.tools = tools;
+            requestBody.tool_choice = tool_choice || "auto";
+        }
+
         const response = await fetchWithRetry("https://api.together.xyz/v1/chat/completions", {
             method: "POST",
             headers: {
                 "Authorization": `Bearer ${finalKey}`,
                 "Content-Type": "application/json"
             },
-            body: JSON.stringify({
-                model: model.replace('together/', ''),
-                messages,
-                stream: !!stream
-            }),
+            body: JSON.stringify(requestBody),
             signal: controller.signal
         });
 

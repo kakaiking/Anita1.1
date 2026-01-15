@@ -9,6 +9,7 @@ window.AgentManager = class AgentManager {
     constructor(aiService, callbacks) {
         this.ai = aiService;
         this.addLog = callbacks.addLog;
+        this.addMessage = callbacks.addMessage;
         this.updateUI = callbacks.updateUI;
         this.updateSession = callbacks.updateSession;
         this.loadFiles = callbacks.loadFiles; // For refreshing file explorer
@@ -24,7 +25,7 @@ window.AgentManager = class AgentManager {
      * @param {string} activeFile - The currently active file path (optional)
      * @returns {number} sessionId
      */
-    async startSession(goal, chatId, workspace, activeFile = null) {
+    async startSession(goal, chatId, workspace, activeFile = null, image = null, settings = null) {
         const sessionId = Date.now();
 
         // Read active file content if provided
@@ -51,6 +52,39 @@ window.AgentManager = class AgentManager {
             }
         }
 
+        // If image is provided, use vision model to analyze it first
+        let imageDescription = '';
+        if (image && settings?.visionModel) {
+            this.addLog('🖼️ Analyzing image with vision model...');
+            try {
+                const visionResponse = await this.ai.chat(
+                    [
+                        {
+                            role: 'user',
+                            content: [
+                                {
+                                    type: 'text',
+                                    text: 'Analyze this image in detail. Describe what you see, including UI elements, colors, layout, text, and any other relevant details. Be specific and thorough as this description will be used by a coding assistant to implement the UI.'
+                                },
+                                { type: 'image_url', image_url: { url: image } }
+                            ]
+                        }
+                    ],
+                    null,  // no streaming
+                    null,  // no abort signal
+                    settings.visionModel  // use vision model
+                );
+
+                imageDescription = visionResponse;
+                this.addLog(`✅ Vision analysis complete`);
+                console.log('Image description:', imageDescription);
+            } catch (error) {
+                this.addLog(`⚠️ Vision model error: ${error.message}`);
+                console.error('Vision model error:', error);
+                // Continue without image description
+            }
+        }
+
         const session = {
             id: sessionId,
             chatId: chatId,
@@ -73,6 +107,10 @@ Absolute Path: ${activeFile}
 \`\`\`${activeFileLanguage}
 ${activeFileContent}
 \`\`\`
+
+` : ''}${imageDescription ? `**Image Description:**
+The user has provided an image that shows the following:
+${imageDescription}
 
 ` : ''}**Your Goal:** ${goal}
 
@@ -100,6 +138,7 @@ ${activeFileContent}
 
 Begin working on the task now.`
                 },
+
                 {
                     role: 'user',
                     content: `Start working on: ${goal}`
@@ -149,8 +188,41 @@ Begin working on the task now.`
                     window.AGENT_TOOLS     // pass tools for function calling
                 );
 
+                // Validate response structure
+                if (!response) {
+                    throw new Error('AI returned null response');
+                }
+
+                // Log the full response for debugging - but truncate if too large
+                const responseStr = JSON.stringify(response);
+                if (responseStr.length > 500) {
+                    console.log('Agent AI Response (truncated):', responseStr.substring(0, 500) + '...');
+                } else {
+                    console.log('Agent AI Response:', response);
+                }
+
+                // Check if response has the expected structure
+                if (!response.choices || !Array.isArray(response.choices) || response.choices.length === 0) {
+                    // Log the actual response to help debug
+                    this.addLog(`⚠️ Unexpected API response format`);
+                    console.error('Full response object:', response);
+                    console.error('Response type:', typeof response);
+                    console.error('Is string?:', typeof response === 'string');
+
+                    // If it's a string, it means AIService returned content directly (shouldn't happen with tools)
+                    if (typeof response === 'string') {
+                        throw new Error(`API returned string instead of object. This suggests tools were not properly sent to the API. Response: "${response.substring(0, 100)}..."`);
+                    }
+
+                    throw new Error(`AI response missing choices array. Check console for full response details.`);
+                }
+
                 // Extract the message from response
                 const message = response.choices[0].message;
+
+                if (!message) {
+                    throw new Error('AI response missing message object');
+                }
 
                 // Add AI's response to history
                 session.history.push(message);
@@ -205,11 +277,14 @@ Begin working on the task now.`
                 if (message.content) {
                     this.addLog(`✨ Agent: ${message.content}`);
 
-                    // Add purely to history so it shows in chat
-                    session.history.push({
-                        role: 'assistant',
-                        content: message.content
-                    });
+                    // Add final message to chat UI
+                    if (this.addMessage) {
+                        this.addMessage(session.chatId, {
+                            role: 'assistant',
+                            content: message.content,
+                            timestamp: Date.now()
+                        });
+                    }
 
                     this.updateSession(sessionId, {
                         status: 'finished',
